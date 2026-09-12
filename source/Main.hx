@@ -160,7 +160,6 @@ class Main extends Sprite
 		SUtil.doPermissionsShit();
 		setupMobileStorage();
 		mobile.backend.CrashHandler.refreshNativeCrashDirectory();
-		checkDualScreen();
 		#end
 		mobile.backend.CrashHandler.init();
 		gameanalytics.GAAppLifecycle.install();
