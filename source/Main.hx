@@ -49,6 +49,7 @@ import states.backend.passState.PassState;
 import general.backend.device.AppData;
 import states.backend.pirateState.PirateState;
 	import android.content.Context;
+import openfl.utils.JNI;
 #end
 
 #if desktop
@@ -91,27 +92,37 @@ class Main extends Sprite
 	{
 		try
 		{
-			var displayManager:Dynamic = cast Lib.current.activity.getSystemService(Context.DISPLAY_SERVICE);
-			var displays:Array<Dynamic> = displayManager.getDisplays();
-			if (displays != null && displays.length > 1)
-			{
-				isDualScreen = true;
-				var secondaryDisplay:Dynamic = displays[1];
-				var bounds = secondaryDisplay.getBounds();
-				bottomScreenHeight = bounds.height;
-				trace("[DualScreen] Detected " + displays.length + " displays. Bottom height: " + bottomScreenHeight);
-			}
-			else
-			{
-				trace("[DualScreen] Only " + (displays == null ? "null" : Std.string(displays.length)) + " display(s) found");
-			}
-		}
-		catch (e:Dynamic)
-		{
-			trace("[DualScreen] Check failed: " + e);
-		}
-	}
-	#end
+				  // 1. 通过 JNI 获取当前 Activity
+        	var getActivity = JNI.createStaticMethod("org.libsdl.app.SDLActivity", "getContext", "()Landroid/content/Context;");
+        	var context:Dynamic = getActivity();
+        
+        	if (context == null) return;
+
+        		// 2. 通过 JNI 获取 DISPLAY_SERVICE 常量
+        	var getDisplayService = JNI.createStaticField("android/content/Context", "DISPLAY_SERVICE", "Ljava/lang/String;");
+        	var displayService:Dynamic = getDisplayService();
+
+        		// 3. 调用 getSystemService
+        	var getSystemService = JNI.createMemberMethod("android/content/Context", "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
+        	var displayManager:Dynamic = getSystemService(context, displayService);
+
+        	if (displayManager != null) {
+           		// 4. 调用 getDisplays()
+            var getDisplays = JNI.createMemberMethod("android/hardware/display/DisplayManager", "getDisplays", "()[Landroid/view/Display;");
+            var displays:Array<Dynamic> = getDisplays(displayManager);
+            
+            if (displays != null && displays.length > 1) {
+                isDualScreen = true;
+                // 简单估算下屏高度（占主屏35%）
+                bottomScreenHeight = Math.floor(openfl.Lib.current.stage.stageHeight * 0.35); 
+                trace("Dual Screen Detected! Bottom Height: " + bottomScreenHeight);
+            }
+        }
+    } catch (e:Dynamic) {
+        trace("Dual screen check failed: " + e);
+    }
+}
+#end
 
 	public static function getReplayOverlay():ReplayOverlay
 	{
