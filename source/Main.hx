@@ -88,40 +88,10 @@ class Main extends Sprite
 	public static var isDualScreen:Bool = false;
 	public static var bottomScreenHeight:Int = 0;
 	
-	private function checkDualScreen():Void
-	{
-		try
-		{
-				  // 1. 通过 JNI 获取当前 Activity
-        	var getActivity = JNI.createStaticMethod("org.libsdl.app.SDLActivity", "getContext", "()Landroid/content/Context;");
-        	var context:Dynamic = getActivity();
-        
-        	if (context == null) return;
-
-        		// 2. 通过 JNI 获取 DISPLAY_SERVICE 常量
-        	var displayServiceField = JNI.createStaticField("android/content/Context", "DISPLAY_SERVICE", "Ljava/lang/String;");
-			var displayService:Dynamic = displayServiceField; //  正确：直接读取静态字段的值，不需要加括号 ()
-
-        		// 3. 调用 getSystemService
-        	var getSystemService = JNI.createMemberMethod("android/content/Context", "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
-        	var displayManager:Dynamic = getSystemService(context, displayService);
-
-        	if (displayManager != null) {
-           		// 4. 调用 getDisplays()
-            var getDisplays = JNI.createMemberMethod("android/hardware/display/DisplayManager", "getDisplays", "()[Landroid/view/Display;");
-            var displays:Array<Dynamic> = getDisplays(displayManager);
-            
-            if (displays != null && displays.length > 1) {
-                isDualScreen = true;
-                // 简单估算下屏高度（占主屏35%）
-                bottomScreenHeight = Math.floor(openfl.Lib.current.stage.stageHeight * 0.35); 
-                trace("Dual Screen Detected! Bottom Height: " + bottomScreenHeight);
-            }
-        }
-    } catch (e:Dynamic) {
-        trace("Dual screen check failed: " + e);
-    }
-}
+    // 专为 AYN Thor 双屏设备硬编码配置
+    isDualScreen = true;
+    bottomScreenHeight = Math.floor(openfl.Lib.current.stage.stageHeight * 0.35); 
+    trace("AYN Thor Dual Screen Mode Enabled! Bottom Height: " + bottomScreenHeight);
 #end
 
 	public static function getReplayOverlay():ReplayOverlay
