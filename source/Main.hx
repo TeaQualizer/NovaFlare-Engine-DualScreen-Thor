@@ -79,21 +79,44 @@ class Main extends Sprite
 		startFullscreen: false // if the game should start at fullscreen mode
 	};
 
-	public static var fpsVar:FPSViewer;
-	public static var watermark:Watermark;
-	private static var replayOverlay:ReplayOverlay;
+	    public static var fpsVar:FPSViewer;
+    public static var watermark:Watermark;
+    private static var replayOverlay:ReplayOverlay;
 
-	#if android
-	private var mobileViewportGame:FlxGame;
-	public static var isDualScreen:Bool = false;
-	public static var bottomScreenHeight:Int = 0;
-	
-    // 专为 AYN Thor 双屏设备硬编码配置
-    isDualScreen = true;
-    bottomScreenHeight = Math.floor(openfl.Lib.current.stage.stageHeight * 0.35); 
-    trace("AYN Thor Dual Screen Mode Enabled! Bottom Height: " + bottomScreenHeight);
+    #if android
+    private var mobileViewportGame:FlxGame;
+    
+    // 2. 变量只负责定义，不负责复杂的计算（特别是依赖 stage 的计算）
+    public static var isDualScreen:Bool = false;
+    public static var bottomScreenHeight:Int = 0;
+    #end
+
+    // 3. 使用静态初始化块来处理启动时的逻辑判断
+    // 这样既符合语法，又能保证在游戏启动最早期执行
+    static function __init__() 
+    {
+        #if android
+        // 在这里进行硬编码配置（虽然不建议，但语法上必须放在这里）
+        isDualScreen = true; 
+        
+        // 注意：此时 stage 可能仍为 null，建议稍后在 create() 中计算高度
+        // 如果必须现在算，请确保 Lib.current.stage 已存在，否则这里也会崩
+        if (openfl.Lib.current != null && openfl.Lib.current.stage != null) {
+             bottomScreenHeight = Math.floor(openfl.Lib.current.stage.stageHeight * 0.35);
+        } else {
+             bottomScreenHeight = 252; // 720 * 0.35 的预设值，防止崩溃
+        }
+        
+        trace("AYN Thor Dual Screen Mode Enabled! Bottom Height: " + bottomScreenHeight);
+        #end
+    }
+
+    public function new() 
+    {
+        super();
+        // ... 原有的 new 代码 ...
+    }
 }
-#end
 
 	public static function getReplayOverlay():ReplayOverlay
 	{
