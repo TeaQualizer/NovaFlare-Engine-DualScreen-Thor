@@ -17,6 +17,7 @@
 
 # Introduction
 The FNF-NovaFlare-Engine was originally created to be compatible with the Camellia mod, and it has continuously evolved into an independent engine, developed by Chinese developers. 
+This fork is for personal use, which aims at adding a score display on the 2nd screen of AYN Thor (or maybe other dual screen andriod console).
 
 V1.0.1 is based on FNF-Psych-Engine-0.6.3.
 V1.1.0-beta-1 and above are based on 0.7.3.
