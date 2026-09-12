@@ -99,8 +99,8 @@ class Main extends Sprite
         	if (context == null) return;
 
         		// 2. 通过 JNI 获取 DISPLAY_SERVICE 常量
-        	var getDisplayService = JNI.createStaticField("android/content/Context", "DISPLAY_SERVICE", "Ljava/lang/String;");
-        	var displayService:Dynamic = getDisplayService();
+        	var displayServiceField = JNI.createStaticField("android/content/Context", "DISPLAY_SERVICE", "Ljava/lang/String;");
+			var displayService:Dynamic = displayServiceField; //  正确：直接读取静态字段的值，不需要加括号 ()
 
         		// 3. 调用 getSystemService
         	var getSystemService = JNI.createMemberMethod("android/content/Context", "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
