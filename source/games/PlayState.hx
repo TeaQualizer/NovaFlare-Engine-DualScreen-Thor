@@ -7,12 +7,15 @@ import flixel.text.FlxText;
 import flixel.ui.FlxBar;
 #end
 
-var camHUD bottom:FlxCamera;
+// --- Dual Screen Support Variables ---
+#if android
+var camHUDBottom:FlxCamera;
 var bottomHealthBar:FlxBar;
 var bottomIconP1:HealthIcon;
 var bottomIconP2:HealthIcon;
 var bottomScoreTxt:FlxText;
 var bottomRatingTxt:FlxText;
+#end
 // ---------------------------
 
 import openfl.Lib;
@@ -5699,9 +5702,10 @@ class PlayState extends MusicBeatState
 // --- Dual Screen HUD Init ---
 #if android
 if (Main.isDualScreen) {
+    // 创建下屏相机 (假设下屏高度由 Main.hx 计算并传入)
     camHUDBottom = new FlxCamera(0, FlxG.height - Main.bottomScreenHeight, FlxG.width, Main.bottomScreenHeight);
-    camHUDBottom.bgColor.alpha = 0; // 透明背景
-    FlxG.cameras.add(camHUDBottom, false); // false = 不替换主相机
+    camHUDBottom.bgColor.alpha = 0; // 必须透明，否则下屏是黑块
+    FlxG.cameras.add(camHUDBottom, false); // false 表示不替换默认相机
 
     // 1. 下屏血条
     bottomHealthBar = new FlxBar(0, 0, LEFT_TO_RIGHT, Std.int(camHUDBottom.width * 0.8), 20, this, "health", 0, 2);
@@ -5724,7 +5728,7 @@ if (Main.isDualScreen) {
     bottomIconP2.cameras = [camHUDBottom];
     add(bottomIconP2);
 
-    // 3. 下屏分数/评级
+    // 3. 下屏文本
     bottomScoreTxt = new FlxText(10, 10, 0, "Score: 0", 24);
     bottomScoreTxt.cameras = [camHUDBottom];
     add(bottomScoreTxt);
@@ -5738,15 +5742,15 @@ if (Main.isDualScreen) {
 // --- Dual Screen HUD Update ---
 #if android
 if (Main.isDualScreen && camHUDBottom != null) {
-    // 同步数据
+    // 同步分数和评级
     bottomScoreTxt.text = "Score: " + songScore;
     bottomRatingTxt.text = "Rating: " + ratingName + " (" + ratingPercent + "%)";
     
-    // 同步图标位置 (防止主屏图标动画导致下屏错位)
+    // 同步图标位置
     bottomIconP1.x = bottomHealthBar.x - 50;
     bottomIconP2.x = bottomHealthBar.x + bottomHealthBar.width - 50;
-    
-    // 可选：下屏背景遮罩，防止游戏画面透到血条后面
-    // 可以在 create 中加一个全屏黑色 FlxSprite 到 camHUDBottom
 }
 #end
+
+// 关键：确保你的 update 函数里有这一行！
+super.update(elapsed);
