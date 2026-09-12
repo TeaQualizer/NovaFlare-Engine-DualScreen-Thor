@@ -79,7 +79,7 @@ class Main extends Sprite
 		startFullscreen: false // if the game should start at fullscreen mode
 	};
 
-	    public static var fpsVar:FPSViewer;
+	public static var fpsVar:FPSViewer;
     public static var watermark:Watermark;
     private static var replayOverlay:ReplayOverlay;
 
@@ -116,7 +116,7 @@ class Main extends Sprite
         super();
         // ... 原有的 new 代码 ...
     }
-}
+
 
 	public static function getReplayOverlay():ReplayOverlay
 	{
