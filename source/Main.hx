@@ -49,8 +49,6 @@ import states.backend.passState.PassState;
 import general.backend.device.AppData;
 import states.backend.pirateState.PirateState;
 	import android.content.Context;
-	import android.view.Display;
-	import android.view.DisplayManager;
 #end
 
 #if desktop
@@ -93,12 +91,12 @@ class Main extends Sprite
 	{
 		try
 		{
-			var displayManager:DisplayManager = cast Lib.current.activity.getSystemService(Context.DISPLAY_SERVICE);
+			var displayManager:Dynamic = cast Lib.current.activity.getSystemService(Context.DISPLAY_SERVICE);
 			var displays:Array<Dynamic> = displayManager.getDisplays();
 			if (displays != null && displays.length > 1)
 			{
 				isDualScreen = true;
-				var secondaryDisplay:Display = displays[1];
+				var secondaryDisplay:Dynamic = displays[1];
 				var bounds = secondaryDisplay.getBounds();
 				bottomScreenHeight = bounds.height;
 				trace("[DualScreen] Detected " + displays.length + " displays. Bottom height: " + bottomScreenHeight);
