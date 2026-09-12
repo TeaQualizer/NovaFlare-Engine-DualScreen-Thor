@@ -111,12 +111,6 @@ class Main extends Sprite
         #end
     }
 
-    public function new() 
-    {
-        super();
-        // ... 原有的 new 代码 ...
-    }
-
 
 	public static function getReplayOverlay():ReplayOverlay
 	{
