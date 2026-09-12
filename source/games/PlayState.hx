@@ -2603,7 +2603,7 @@ class PlayState extends MusicBeatState
 			// Sync score
 			if (bottomScoreTxt != null)
 			{
-				bottomScoreTxt.text = \"Score: \" + songScore;
+				bottomScoreTxt.text = "Score: " + songScore;
 			}
 
 			// Sync rating
@@ -2614,7 +2614,7 @@ class PlayState extends MusicBeatState
 				{
 					ratingPercent = songHits / (songHits + songMisses);
 				}
-				var ratingName:String = \"N/A\";
+				var ratingName:String = "N/A";
 				for (i in 0...ratingStuff.length)
 				{
 					if (ratingPercent >= ratingStuff[i][1] || i == ratingStuff.length - 1)
@@ -2622,7 +2622,7 @@ class PlayState extends MusicBeatState
 						ratingName = ratingStuff[i][0];
 					}
 				}
-				bottomRatingTxt.text = \"Rating: \" + ratingName;
+				bottomRatingTxt.text = "Rating: " + ratingName;
 			}
 
 			// Sync icon positions
