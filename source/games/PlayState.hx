@@ -1,5 +1,20 @@
 package games;
 
+// --- Dual Screen Support ---
+#if android
+import flixel.FlxCamera;
+import flixel.text.FlxText;
+import flixel.ui.FlxBar;
+#end
+
+var camHUD bottom:FlxCamera;
+var bottomHealthBar:FlxBar;
+var bottomIconP1:HealthIcon;
+var bottomIconP2:HealthIcon;
+var bottomScoreTxt:FlxText;
+var bottomRatingTxt:FlxText;
+// ---------------------------
+
 import openfl.Lib;
 import gameanalytics.GABridge;
 
@@ -5680,3 +5695,58 @@ class PlayState extends MusicBeatState
 		return false;
 	}
 }
+
+// --- Dual Screen HUD Init ---
+#if android
+if (Main.isDualScreen) {
+    camHUDBottom = new FlxCamera(0, FlxG.height - Main.bottomScreenHeight, FlxG.width, Main.bottomScreenHeight);
+    camHUDBottom.bgColor.alpha = 0; // 透明背景
+    FlxG.cameras.add(camHUDBottom, false); // false = 不替换主相机
+
+    // 1. 下屏血条
+    bottomHealthBar = new FlxBar(0, 0, LEFT_TO_RIGHT, Std.int(camHUDBottom.width * 0.8), 20, this, "health", 0, 2);
+    bottomHealthBar.screenCenter(X);
+    bottomHealthBar.y = camHUDBottom.height - 40;
+    bottomHealthBar.createFilledBar(0xFFD30000, 0xFF00FF00);
+    bottomHealthBar.cameras = [camHUDBottom];
+    add(bottomHealthBar);
+
+    // 2. 下屏图标
+    bottomIconP1 = new HealthIcon(boyfriend.curCharacter, true);
+    bottomIconP1.y = bottomHealthBar.y - 75;
+    bottomIconP1.x = bottomHealthBar.x - 50;
+    bottomIconP1.cameras = [camHUDBottom];
+    add(bottomIconP1);
+
+    bottomIconP2 = new HealthIcon(dad.curCharacter, false);
+    bottomIconP2.y = bottomHealthBar.y - 75;
+    bottomIconP2.x = bottomHealthBar.x + bottomHealthBar.width - 50;
+    bottomIconP2.cameras = [camHUDBottom];
+    add(bottomIconP2);
+
+    // 3. 下屏分数/评级
+    bottomScoreTxt = new FlxText(10, 10, 0, "Score: 0", 24);
+    bottomScoreTxt.cameras = [camHUDBottom];
+    add(bottomScoreTxt);
+
+    bottomRatingTxt = new FlxText(10, 40, 0, "Rating: N/A", 18);
+    bottomRatingTxt.cameras = [camHUDBottom];
+    add(bottomRatingTxt);
+}
+#end
+
+// --- Dual Screen HUD Update ---
+#if android
+if (Main.isDualScreen && camHUDBottom != null) {
+    // 同步数据
+    bottomScoreTxt.text = "Score: " + songScore;
+    bottomRatingTxt.text = "Rating: " + ratingName + " (" + ratingPercent + "%)";
+    
+    // 同步图标位置 (防止主屏图标动画导致下屏错位)
+    bottomIconP1.x = bottomHealthBar.x - 50;
+    bottomIconP2.x = bottomHealthBar.x + bottomHealthBar.width - 50;
+    
+    // 可选：下屏背景遮罩，防止游戏画面透到血条后面
+    // 可以在 create 中加一个全屏黑色 FlxSprite 到 camHUDBottom
+}
+#end
