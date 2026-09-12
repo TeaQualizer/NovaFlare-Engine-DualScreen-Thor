@@ -82,12 +82,12 @@
 	<window if="switch" orientation="landscape" fullscreen="true" width="0" height="0" resizable="true" />
 
 	<!-- 针对 AYN Thor 或类似双屏设备的横屏强制与全屏设置 -->
-	<window orientation="landscape" fullscreen="true" resizable="false" />
-
-	<!-- 在 Project.xml 中添加 -->
-	<android permission="android.permission.SYSTEM_ALERT_WINDOW" />
-	<android permission="android.permission.SYSTEM_OVERLAY_WINDOW" />
-	<android permission="android.permission.MANAGE_EXTERNAL_STORAGE" />
+	<section if="android">
+		<window orientation="landscape" fullscreen="true" resizable="false" />
+		<android permission="android.permission.SYSTEM_ALERT_WINDOW" />
+		<android permission="android.permission.SYSTEM_OVERLAY_WINDOW" />
+		<android permission="android.permission.MANAGE_EXTERNAL_STORAGE" />
+	</section>
 
 	<!-- OpenAL config -->
 	<section if="desktop">
