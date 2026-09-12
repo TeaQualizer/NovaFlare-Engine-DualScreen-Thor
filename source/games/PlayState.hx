@@ -24,6 +24,7 @@ import flixel.input.touch.FlxTouch;
 import flixel.graphics.FlxGraphic;
 #if android
 import flixel.ui.FlxBar;
+import flixel.FlxColor;
 #end
 
 import modchart.Manager;
@@ -294,7 +295,7 @@ class PlayState extends MusicBeatState
 	#if android
 	// --- Dual Screen Support ---
 	public static var bottomCam:FlxCamera;
-	public var bottomHealthBar:FlxBar;
+	public var bottomHealthBar:Dynamic;
 	public var bottomIconP1:HealthIcon;
 	public var bottomIconP2:HealthIcon;
 	public var bottomScoreTxt:FlxText;
@@ -743,10 +744,10 @@ class PlayState extends MusicBeatState
 			FlxG.cameras.add(bottomCam, false);
 
 			// 1. Bottom health bar
-			bottomHealthBar = new FlxBar(0, 0, LEFT_TO_RIGHT, Std.int(bottomCam.width * 0.8), 20, this, "health", 0, 2);
+			bottomHealthBar = new FlxBar(0, 0, "leftToRight", Std.int(bottomCam.width * 0.8), 20, this, "health", 0, 2);
 			bottomHealthBar.screenCenter(X);
 			bottomHealthBar.y = bottomCam.height - 40;
-			bottomHealthBar.colors(FlxColor.RED, FlxColor.GREEN);
+			bottomHealthBar.color(0xFFFF0000, 0xFF00FF00);
 			bottomHealthBar.cameras = [bottomCam];
 			add(bottomHealthBar);
 
