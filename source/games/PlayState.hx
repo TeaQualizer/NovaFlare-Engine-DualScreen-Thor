@@ -907,6 +907,47 @@ class PlayState extends MusicBeatState
 
 		super.create();
 
+	#if android
+	// === Dual Screen HUD Init ===
+	if (Main.isDualScreen) {
+		// 创建下屏相机
+		camHUDBottom = new FlxCamera(0, FlxG.height - Main.bottomScreenHeight, FlxG.width, Main.bottomScreenHeight);
+		camHUDBottom.bgColor.alpha = 0; // 透明背景
+		FlxG.cameras.add(camHUDBottom, false); // 不替换默认相机
+
+		// 1. 下屏血条
+		bottomHealthBar = new Bar(0, 0, LEFT_TO_RIGHT, Std.int(camHUDBottom.width * 0.8), 20, this, "health", 0, 2);
+		bottomHealthBar.screenCenter(X);
+		bottomHealthBar.y = camHUDBottom.height - 40;
+		bottomHealthBar.colors(0xFFD30000, 0xFF00FF00);
+		bottomHealthBar.cameras = [camHUDBottom];
+		add(bottomHealthBar);
+
+		// 2. 下屏图标
+		bottomIconP1 = new HealthIcon(boyfriend.curCharacter, true);
+		bottomIconP1.y = bottomHealthBar.y - 75;
+		bottomIconP1.x = bottomHealthBar.x - 50;
+		bottomIconP1.cameras = [camHUDBottom];
+		add(bottomIconP1);
+
+		bottomIconP2 = new HealthIcon(dad.curCharacter, false);
+		bottomIconP2.y = bottomHealthBar.y - 75;
+		bottomIconP2.x = bottomHealthBar.x + bottomHealthBar.width - 50;
+		bottomIconP2.cameras = [camHUDBottom];
+		add(bottomIconP2);
+
+		// 3. 下屏分数文本
+		bottomScoreTxt = new FlxText(10, 10, 0, "Score: 0", 24);
+		bottomScoreTxt.cameras = [camHUDBottom];
+		add(bottomScoreTxt);
+
+		// 4. 下屏评级文本
+		bottomRatingTxt = new FlxText(10, 40, 0, "Rating: N/A", 18);
+		bottomRatingTxt.cameras = [camHUDBottom];
+		add(bottomRatingTxt);
+	}
+	#end
+
 		callOnScripts('onCreateFinal');
 
 		GCManager.enable(true);
@@ -2596,6 +2637,19 @@ class PlayState extends MusicBeatState
 
 		updateIconsScale(elapsed);
 		updateIconsPosition();
+
+	#if android
+	// === Dual Screen HUD Update ===
+	if (Main.isDualScreen && camHUDBottom != null) {
+		// 同步分数
+		bottomScoreTxt.text = "Score: " + songScore;
+		// 同步评级
+		bottomRatingTxt.text = "Rating: N/A";
+		// 同步图标位置
+		bottomIconP1.x = bottomHealthBar.x - 50;
+		bottomIconP2.x = bottomHealthBar.x + bottomHealthBar.width - 50;
+	}
+	#end
 
 		if (startingSong)
 		{
@@ -5693,43 +5747,3 @@ class PlayState extends MusicBeatState
 		return false;
 	}
 }
-
-// --- Dual Screen HUD Init ---
-#if android
-if (Main.isDualScreen) {
-    // 创建下屏相机 (假设下屏高度由 Main.hx 计算并传入)
-    camHUDBottom = new FlxCamera(0, FlxG.height - Main.bottomScreenHeight, FlxG.width, Main.bottomScreenHeight);
-    camHUDBottom.bgColor.alpha = 0; // 必须透明，否则下屏是黑块
-    FlxG.cameras.add(camHUDBottom, false); // false 表示不替换默认相机
-
-    // 1. 下屏血条
-    bottomHealthBar = new Bar(0, 0, LEFT_TO_RIGHT, Std.int(camHUDBottom.width * 0.8), 20, this, "health", 0, 2);
-    bottomHealthBar.screenCenter(X);
-    bottomHealthBar.y = camHUDBottom.height - 40;
-    bottomHealthBar.createFilledBar(0xFFD30000, 0xFF00FF00);
-    bottomHealthBar.cameras = [camHUDBottom];
-    add(bottomHealthBar);
-
-    // 2. 下屏图标
-    bottomIconP1 = new HealthIcon(boyfriend.curCharacter, true);
-    bottomIconP1.y = bottomHealthBar.y - 75;
-    bottomIconP1.x = bottomHealthBar.x - 50;
-    bottomIconP1.cameras = [camHUDBottom];
-    add(bottomIconP1);
-
-    bottomIconP2 = new HealthIcon(dad.curCharacter, false);
-    bottomIconP2.y = bottomHealthBar.y - 75;
-    bottomIconP2.x = bottomHealthBar.x + bottomHealthBar.width - 50;
-    bottomIconP2.cameras = [camHUDBottom];
-    add(bottomIconP2);
-
-    // 3. 下屏文本
-    bottomScoreTxt = new FlxText(10, 10, 0, "Score: 0", 24);
-    bottomScoreTxt.cameras = [camHUDBottom];
-    add(bottomScoreTxt);
-
-    bottomRatingTxt = new FlxText(10, 40, 0, "Rating: N/A", 18);
-    bottomRatingTxt.cameras = [camHUDBottom];
-    add(bottomRatingTxt);
-}
-
