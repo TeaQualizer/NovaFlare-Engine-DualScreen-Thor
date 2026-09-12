@@ -49,7 +49,7 @@ import states.backend.passState.PassState;
 import general.backend.device.AppData;
 import states.backend.pirateState.PirateState;
 	import android.content.Context;
-import openfl.utils.JNI;
+import  lime.system.JNI;
 #end
 
 #if desktop
