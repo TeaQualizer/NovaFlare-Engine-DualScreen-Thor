@@ -8,7 +8,6 @@ import openfl.Lib;
 import openfl.display.Sprite;
 import openfl.events.Event;
 import openfl.display.StageScaleMode;
-import openfl.display.Display;
 import openfl.events.KeyboardEvent;
 import openfl.utils.Assets;
 
@@ -49,10 +48,9 @@ import states.backend.passState.PassState;
 #if android
 import general.backend.device.AppData;
 import states.backend.pirateState.PirateState;
-
-	import android.app.Activity;
-	import android.view.Display;
 	import android.content.Context;
+	import android.view.Display;
+	import android.view.DisplayManager;
 #end
 
 #if desktop
@@ -82,19 +80,39 @@ class Main extends Sprite
 		startFullscreen: false // if the game should start at fullscreen mode
 	};
 
-	#if android
-	// === Dual Screen Support Variables ===
-	public static var isDualScreen:Bool = false;
-	public static var bottomScreenHeight:Int = 0;
-	// =====================================
-	#end
-
 	public static var fpsVar:FPSViewer;
 	public static var watermark:Watermark;
 	private static var replayOverlay:ReplayOverlay;
 
 	#if android
 	private var mobileViewportGame:FlxGame;
+	public static var isDualScreen:Bool = false;
+	public static var bottomScreenHeight:Int = 0;
+	
+	private function checkDualScreen():Void
+	{
+		try
+		{
+			var displayManager:DisplayManager = cast Lib.current.activity.getSystemService(Context.DISPLAY_SERVICE);
+			var displays:Array<Dynamic> = displayManager.getDisplays();
+			if (displays != null && displays.length > 1)
+			{
+				isDualScreen = true;
+				var secondaryDisplay:Display = displays[1];
+				var bounds = secondaryDisplay.getBounds();
+				bottomScreenHeight = bounds.height;
+				trace("[DualScreen] Detected " + displays.length + " displays. Bottom height: " + bottomScreenHeight);
+			}
+			else
+			{
+				trace("[DualScreen] Only " + (displays == null ? "null" : Std.string(displays.length)) + " display(s) found");
+			}
+		}
+		catch (e:Dynamic)
+		{
+			trace("[DualScreen] Check failed: " + e);
+		}
+	}
 	#end
 
 	public static function getReplayOverlay():ReplayOverlay
@@ -136,28 +154,10 @@ class Main extends Sprite
 	{
 		super();
 		#if android
-		// === Dual Screen Detection (Android Only) ===
-		try {
-			var activity:android.app.Activity = cast openfl.Lib.current;
-			var displayManager = activity.getSystemService(android.content.Context.DISPLAY_SERVICE);
-			var displays = displayManager.getDisplays();
-			if (displays != null && displays.length > 1) {
-				isDualScreen = true;
-				var bottomDisplay = displays[1];
-				var displayRect = bottomDisplay.getRect();
-				bottomScreenHeight = Std.int(displayRect.height);
-				trace("[DualScreen] Detected! Bottom display height: " + bottomScreenHeight);
-			} else {
-				trace("[DualScreen] Single display detected, dual screen support disabled");
-			}
-		} catch (e:Dynamic) {
-			trace("[DualScreen] Check failed: " + e);
-		}
-		#end
-		#if android
 		SUtil.doPermissionsShit();
 		setupMobileStorage();
 		mobile.backend.CrashHandler.refreshNativeCrashDirectory();
+		checkDualScreen();
 		#end
 		mobile.backend.CrashHandler.init();
 		gameanalytics.GAAppLifecycle.install();
