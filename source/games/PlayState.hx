@@ -24,7 +24,7 @@ import flixel.input.touch.FlxTouch;
 import flixel.graphics.FlxGraphic;
 #if android
 import flixel.ui.FlxBar;
-import flixel.FlxColor;
+import flixel.util.FlxColor;
 #end
 
 import modchart.Manager;
