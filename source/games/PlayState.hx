@@ -1,9 +1,6 @@
 package games;
 
 import openfl.Lib;
-import flixel.text.FlxText;
-import flixel.FlxCamera;
-import flixel.ui.FlxBar;
 import gameanalytics.GABridge;
 
 import haxe.Timer;
@@ -25,6 +22,9 @@ import flixel.input.keyboard.FlxKey;
 import flixel.animation.FlxAnimationController;
 import flixel.input.touch.FlxTouch;
 import flixel.graphics.FlxGraphic;
+#if android
+import flixel.ui.FlxBar;
+#end
 
 import modchart.Manager;
 
@@ -285,21 +285,21 @@ class PlayState extends MusicBeatState
 	public var iconP1:HealthIcon;
 	public var iconP2:HealthIcon;
 	public var camHUD:FlxCamera;
-	#if android
-	// === Dual Screen HUD Variables ===
-	var camHUDBottom:FlxCamera;
-	var bottomHealthBar:Bar;
-	var bottomIconP1:HealthIcon;
-	var bottomIconP2:HealthIcon;
-	var bottomScoreTxt:FlxText;
-	var bottomRatingTxt:FlxText;
-	// =================================
-	#end
 	public var camGame:FlxCamera;
 	public var camOther:FlxCamera;
 	public var luaVpadCam:FlxCamera;
 	public var camPause:FlxCamera;
 	public var cameraSpeed:Float = 1;
+
+	#if android
+	// --- Dual Screen Support ---
+	public static var bottomCam:FlxCamera;
+	public var bottomHealthBar:FlxBar;
+	public var bottomIconP1:HealthIcon;
+	public var bottomIconP2:HealthIcon;
+	public var bottomScoreTxt:FlxText;
+	public var bottomRatingTxt:FlxText;
+	#end
 
 	public var songScore:Int = 0;
 	public var songHits:Int = 0;
@@ -734,6 +734,49 @@ class PlayState extends MusicBeatState
 		timeBarBG.cameras = [camHUD];
         timeTxt.cameras = [camHUD];
 
+#if android
+		// --- Dual Screen HUD Init ---
+		if (Main.isDualScreen && Main.bottomScreenHeight > 0)
+		{
+			bottomCam = new FlxCamera(0, FlxG.height - Main.bottomScreenHeight, FlxG.width, Main.bottomScreenHeight);
+			bottomCam.bgColor.alpha = 0;
+			FlxG.cameras.add(bottomCam, false);
+
+			// 1. Bottom health bar
+			bottomHealthBar = new FlxBar(0, 0, LEFT_TO_RIGHT, Std.int(bottomCam.width * 0.8), 20, this, "health", 0, 2);
+			bottomHealthBar.screenCenter(X);
+			bottomHealthBar.y = bottomCam.height - 40;
+			bottomHealthBar.colors(FlxColor.RED, FlxColor.GREEN);
+			bottomHealthBar.cameras = [bottomCam];
+			add(bottomHealthBar);
+
+			// 2. Bottom icons
+			bottomIconP1 = new HealthIcon(boyfriend.healthIcon, true);
+			bottomIconP1.y = bottomHealthBar.y - 75;
+			bottomIconP1.x = bottomHealthBar.x - 50;
+			bottomIconP1.cameras = [bottomCam];
+			add(bottomIconP1);
+
+			bottomIconP2 = new HealthIcon(dad.healthIcon, false);
+			bottomIconP2.y = bottomHealthBar.y - 75;
+			bottomIconP2.x = bottomHealthBar.x + bottomHealthBar.width - 50;
+			bottomIconP2.cameras = [bottomCam];
+			add(bottomIconP2);
+
+			// 3. Bottom score text
+			bottomScoreTxt = new FlxText(10, 10, 0, "Score: 0", 24);
+			bottomScoreTxt.cameras = [bottomCam];
+			add(bottomScoreTxt);
+
+			// 4. Bottom rating text
+			bottomRatingTxt = new FlxText(10, 40, 0, "Rating: N/A", 18);
+			bottomRatingTxt.cameras = [bottomCam];
+			add(bottomRatingTxt);
+
+			trace("[DualScreen] Bottom HUD initialized. Camera Y: " + (FlxG.height - Main.bottomScreenHeight) + " Height: " + Main.bottomScreenHeight);
+		}
+#end
+
 		if (ClientPrefs.data.pauseButton)
 		{
 			pauseButton_menu = new TouchSpriteButton(2, 2);
@@ -906,47 +949,6 @@ class PlayState extends MusicBeatState
 		cacheCountdown();
 
 		super.create();
-
-	#if android
-	// === Dual Screen HUD Init ===
-	if (Main.isDualScreen) {
-		// 创建下屏相机
-		camHUDBottom = new FlxCamera(0, FlxG.height - Main.bottomScreenHeight, FlxG.width, Main.bottomScreenHeight);
-		camHUDBottom.bgColor.alpha = 0; // 透明背景
-		FlxG.cameras.add(camHUDBottom, false); // 不替换默认相机
-
-		// 1. 下屏血条
-		bottomHealthBar = new Bar(0, 0, LEFT_TO_RIGHT, Std.int(camHUDBottom.width * 0.8), 20, this, "health", 0, 2);
-		bottomHealthBar.screenCenter(X);
-		bottomHealthBar.y = camHUDBottom.height - 40;
-		bottomHealthBar.colors(0xFFD30000, 0xFF00FF00);
-		bottomHealthBar.cameras = [camHUDBottom];
-		add(bottomHealthBar);
-
-		// 2. 下屏图标
-		bottomIconP1 = new HealthIcon(boyfriend.curCharacter, true);
-		bottomIconP1.y = bottomHealthBar.y - 75;
-		bottomIconP1.x = bottomHealthBar.x - 50;
-		bottomIconP1.cameras = [camHUDBottom];
-		add(bottomIconP1);
-
-		bottomIconP2 = new HealthIcon(dad.curCharacter, false);
-		bottomIconP2.y = bottomHealthBar.y - 75;
-		bottomIconP2.x = bottomHealthBar.x + bottomHealthBar.width - 50;
-		bottomIconP2.cameras = [camHUDBottom];
-		add(bottomIconP2);
-
-		// 3. 下屏分数文本
-		bottomScoreTxt = new FlxText(10, 10, 0, "Score: 0", 24);
-		bottomScoreTxt.cameras = [camHUDBottom];
-		add(bottomScoreTxt);
-
-		// 4. 下屏评级文本
-		bottomRatingTxt = new FlxText(10, 40, 0, "Rating: N/A", 18);
-		bottomRatingTxt.cameras = [camHUDBottom];
-		add(bottomRatingTxt);
-	}
-	#end
 
 		callOnScripts('onCreateFinal');
 
@@ -2593,6 +2595,46 @@ class PlayState extends MusicBeatState
 			FlxG.camera.followLerp = 0;
 		onUpdateArgs[0] = elapsed;
 		callOnScripts('onUpdate', onUpdateArgs);
+#if android
+		// --- Dual Screen HUD Update ---
+		if (Main.isDualScreen && bottomCam != null)
+		{
+			// Sync score
+			if (bottomScoreTxt != null)
+			{
+				bottomScoreTxt.text = \"Score: \" + songScore;
+			}
+
+			// Sync rating
+			if (bottomRatingTxt != null)
+			{
+				var ratingPercent:Float = 0;
+				if (songHits + songMisses > 0)
+				{
+					ratingPercent = songHits / (songHits + songMisses);
+				}
+				var ratingName:String = \"N/A\";
+				for (i in 0...ratingStuff.length)
+				{
+					if (ratingPercent >= ratingStuff[i][1] || i == ratingStuff.length - 1)
+					{
+						ratingName = ratingStuff[i][0];
+					}
+				}
+				bottomRatingTxt.text = \"Rating: \" + ratingName;
+			}
+
+			// Sync icon positions
+			if (bottomIconP1 != null && bottomHealthBar != null)
+			{
+				bottomIconP1.x = bottomHealthBar.x - 50;
+			}
+			if (bottomIconP2 != null && bottomHealthBar != null)
+			{
+				bottomIconP2.x = bottomHealthBar.x + bottomHealthBar.width - 50;
+			}
+		}
+#end
 
 		super.update(elapsed);
 
@@ -2637,19 +2679,6 @@ class PlayState extends MusicBeatState
 
 		updateIconsScale(elapsed);
 		updateIconsPosition();
-
-	#if android
-	// === Dual Screen HUD Update ===
-	if (Main.isDualScreen && camHUDBottom != null) {
-		// 同步分数
-		bottomScoreTxt.text = "Score: " + songScore;
-		// 同步评级
-		bottomRatingTxt.text = "Rating: N/A";
-		// 同步图标位置
-		bottomIconP1.x = bottomHealthBar.x - 50;
-		bottomIconP2.x = bottomHealthBar.x + bottomHealthBar.width - 50;
-	}
-	#end
 
 		if (startingSong)
 		{
