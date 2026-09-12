@@ -744,7 +744,7 @@ class PlayState extends MusicBeatState
 			FlxG.cameras.add(bottomCam, false);
 
 			// 1. Bottom health bar
-			bottomHealthBar = new FlxBar(0, 0, "leftToRight", Std.int(bottomCam.width * 0.8), 20, this, "health", 0, 2);
+			bottomHealthBar = new FlxBar(0, 0, FlxBarFillDirection.LEFT_TO_RIGHT, Std.int(bottomCam.width * 0.8), 20, this, "health", 0, 2);
 			bottomHealthBar.screenCenter(X);
 			bottomHealthBar.y = bottomCam.height - 40;
 			bottomHealthBar.color(0xFFFF0000, 0xFF00FF00);
