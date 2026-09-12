@@ -52,7 +52,8 @@ import states.backend.pirateState.PirateState;
 
 	import android.app.Activity;
 	import android.view.Display;
-	import android.content.Context;#end
+	import android.content.Context;
+#end
 
 #if desktop
 import general.backend.device.ALSoftConfig;
