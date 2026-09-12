@@ -92,6 +92,7 @@ class Main extends Sprite
     isDualScreen = true;
     bottomScreenHeight = Math.floor(openfl.Lib.current.stage.stageHeight * 0.35); 
     trace("AYN Thor Dual Screen Mode Enabled! Bottom Height: " + bottomScreenHeight);
+}
 #end
 
 	public static function getReplayOverlay():ReplayOverlay
