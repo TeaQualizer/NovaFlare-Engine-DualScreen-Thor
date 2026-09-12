@@ -24,6 +24,7 @@ import flixel.input.touch.FlxTouch;
 import flixel.graphics.FlxGraphic;
 #if android
 import flixel.ui.FlxBar;
+import flixel.ui.FlxBar.FlxBarFillDirection; // 新增导入
 #end
 
 import modchart.Manager;
