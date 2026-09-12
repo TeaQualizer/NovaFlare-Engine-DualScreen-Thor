@@ -49,7 +49,10 @@ import states.backend.passState.PassState;
 #if android
 import general.backend.device.AppData;
 import states.backend.pirateState.PirateState;
-#end
+
+	import android.app.Activity;
+	import android.view.Display;
+	import android.content.Context;#end
 
 #if desktop
 import general.backend.device.ALSoftConfig;
@@ -78,37 +81,12 @@ class Main extends Sprite
 		startFullscreen: false // if the game should start at fullscreen mode
 	};
 
-class Main extends Sprite 
-{
-    public static var isDualScreen:Bool = false;
-    public static var bottomScreenHeight:Int = 0;
-
-    public function new() 
-    {
-        super();
-        
-        // 1. 检测双屏环境 (Android Only)
-        #if android
-        try {
-            var displays = openfl.system.System.getDisplays(); // 需 Lime 8.0+
-            if (displays != null && displays.length > 1) {
-                isDualScreen = true;
-                // 假设下屏比例为 8:7，上屏 16:9
-                // 这里根据实际设备调整，AYN Thor 下屏通常较矮
-                bottomScreenHeight = Math.floor(Lib.current.stage.stageHeight * 0.35); 
-                trace("Dual Screen Detected! Bottom Height: " + bottomScreenHeight);
-            }
-        } catch (e:Dynamic) {
-            trace("Dual screen check failed: " + e);
-        }
-        #end
-
-        // 2. 初始化游戏
-        // 注意：FNF 通常固定 1280x720，双屏模式下我们保持逻辑分辨率不变
-        // 但在 PlayState 中通过 Camera 裁剪来实现分屏
-        addChild(new FlxGame(0, 0, TitleState, 1, 60, 60, true)); 
-    }
-}
+	#if android
+	// === Dual Screen Support Variables ===
+	public static var isDualScreen:Bool = false;
+	public static var bottomScreenHeight:Int = 0;
+	// =====================================
+	#end
 
 	public static var fpsVar:FPSViewer;
 	public static var watermark:Watermark;
@@ -156,6 +134,25 @@ class Main extends Sprite
 	public function new()
 	{
 		super();
+		#if android
+		// === Dual Screen Detection (Android Only) ===
+		try {
+			var activity:android.app.Activity = cast openfl.Lib.current;
+			var displayManager = activity.getSystemService(android.content.Context.DISPLAY_SERVICE);
+			var displays = displayManager.getDisplays();
+			if (displays != null && displays.length > 1) {
+				isDualScreen = true;
+				var bottomDisplay = displays[1];
+				var displayRect = bottomDisplay.getRect();
+				bottomScreenHeight = Std.int(displayRect.height);
+				trace("[DualScreen] Detected! Bottom display height: " + bottomScreenHeight);
+			} else {
+				trace("[DualScreen] Single display detected, dual screen support disabled");
+			}
+		} catch (e:Dynamic) {
+			trace("[DualScreen] Check failed: " + e);
+		}
+		#end
 		#if android
 		SUtil.doPermissionsShit();
 		setupMobileStorage();
