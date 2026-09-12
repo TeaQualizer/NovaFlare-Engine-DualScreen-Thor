@@ -1,24 +1,9 @@
 package games;
 
-// --- Dual Screen Support ---
-#if android
-import flixel.FlxCamera;
-import flixel.text.FlxText;
-import flixel.ui.FlxBar;
-#end
-
-// --- Dual Screen Support Variables ---
-#if android
-var camHUDBottom:FlxCamera;
-var bottomHealthBar:FlxBar;
-var bottomIconP1:HealthIcon;
-var bottomIconP2:HealthIcon;
-var bottomScoreTxt:FlxText;
-var bottomRatingTxt:FlxText;
-#end
-// ---------------------------
-
 import openfl.Lib;
+import flixel.text.FlxText;
+import flixel.FlxCamera;
+import flixel.ui.FlxBar;
 import gameanalytics.GABridge;
 
 import haxe.Timer;
@@ -300,6 +285,16 @@ class PlayState extends MusicBeatState
 	public var iconP1:HealthIcon;
 	public var iconP2:HealthIcon;
 	public var camHUD:FlxCamera;
+	#if android
+	// === Dual Screen HUD Variables ===
+	var camHUDBottom:FlxCamera;
+	var bottomHealthBar:Bar;
+	var bottomIconP1:HealthIcon;
+	var bottomIconP2:HealthIcon;
+	var bottomScoreTxt:FlxText;
+	var bottomRatingTxt:FlxText;
+	// =================================
+	#end
 	public var camGame:FlxCamera;
 	public var camOther:FlxCamera;
 	public var luaVpadCam:FlxCamera;
@@ -5708,7 +5703,7 @@ if (Main.isDualScreen) {
     FlxG.cameras.add(camHUDBottom, false); // false 表示不替换默认相机
 
     // 1. 下屏血条
-    bottomHealthBar = new FlxBar(0, 0, LEFT_TO_RIGHT, Std.int(camHUDBottom.width * 0.8), 20, this, "health", 0, 2);
+    bottomHealthBar = new Bar(0, 0, LEFT_TO_RIGHT, Std.int(camHUDBottom.width * 0.8), 20, this, "health", 0, 2);
     bottomHealthBar.screenCenter(X);
     bottomHealthBar.y = camHUDBottom.height - 40;
     bottomHealthBar.createFilledBar(0xFFD30000, 0xFF00FF00);
@@ -5737,20 +5732,4 @@ if (Main.isDualScreen) {
     bottomRatingTxt.cameras = [camHUDBottom];
     add(bottomRatingTxt);
 }
-#end
 
-// --- Dual Screen HUD Update ---
-#if android
-if (Main.isDualScreen && camHUDBottom != null) {
-    // 同步分数和评级
-    bottomScoreTxt.text = "Score: " + songScore;
-    bottomRatingTxt.text = "Rating: " + ratingName + " (" + ratingPercent + "%)";
-    
-    // 同步图标位置
-    bottomIconP1.x = bottomHealthBar.x - 50;
-    bottomIconP2.x = bottomHealthBar.x + bottomHealthBar.width - 50;
-}
-#end
-
-// 关键：确保你的 update 函数里有这一行！
-super.update(elapsed);
