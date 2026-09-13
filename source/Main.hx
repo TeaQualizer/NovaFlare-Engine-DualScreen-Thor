@@ -151,8 +151,7 @@ class Main extends Sprite
 	{
 		super();
 		#if android
-		SUtil.doPermissionsShit();
-		setupMobileStorage();
+		
 		mobile.backend.CrashHandler.refreshNativeCrashDirectory();
 		#end
 		mobile.backend.CrashHandler.init();
