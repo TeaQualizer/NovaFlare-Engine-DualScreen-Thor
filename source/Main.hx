@@ -153,16 +153,36 @@ class Main extends Sprite
 		hxvlc.util.Handle.init(#if (hxvlc >= "1.8.0") ['--no-lua'] #end);
 		#end
 		#if android
-    	public static function updateBottomScreen(pixels:Array<Int>, width:Int, height:Int):Void
-    	{
-        if (!isDualScreen) return;
-        try {
-            var updateFunc = JNI.createStaticMethod("general/backend/device/NovaFlareDualScreen", "updateBottomScreen", "([IIIZ)V");
-            updateFunc(pixels, width, height, false);
-        } catch (e:Dynamic) {
-            trace("DualScreen Update Failed: " + e);
-        	}
-    	}
+    	public static function updateBottomScreen(pixels: Array<Int>, width: Int, height: Int): Void
+		{
+    	if (!isDualScreen) return;
+
+    	try {
+        // 1. 获取 Activity 实例 (通常 Main.hx 会保存这个引用，或者通过 JNI 获取)
+        // 注意：如果你的 updateBottomScreen 是静态方法且不需要 Context，可以忽略这一步。
+        // 但通常更新屏幕需要 View 或 Surface，建议检查 Java 端是否需要传入 Activity/Context。
+        // 这里假设 Java 端已经初始化好了静态变量，或者你通过其他方式获取了 Context。
+
+        // 2. 修正后的 JNI 调用
+        // 签名解释：
+        // [I  -> int[] (像素数组)
+        // I   -> int (宽)
+        // I   -> int (高)
+        // Z   -> boolean (你代码里传了 false，所以签名要加上 Z)
+        // V   -> void (返回值)
+        var updateFunc = JNI.createStaticMethod(
+            "general/backend/device/NovaFlareDualScreen",
+            "updateBottomScreen",
+            "([IIIZ)V"
+        );
+
+        // 3. 执行调用
+        updateFunc(pixels, width, height, false);
+
+    	} catch (e: Dynamic) {
+    	trace("DualScreen Update Failed: " + e);
+    }
+}
     	#end					   
 	}
 
