@@ -5806,25 +5806,17 @@ class PlayState extends MusicBeatState
         // 确保尺寸有效，防止底层崩溃
         if (width <= 0 || height <= 0) return;
 
-        // 2. 截取整个游戏舞台的 BitmapData
-        var stageBitmap:openfl.display.BitmapData = FlxG.stage.drawToBitmapData();
-
-        // 3. 创建一个仅包含副屏相机区域大小的 BitmapData
+        // 2. 创建一个与副屏相机大小一致的 BitmapData
         var bottomBitmap:openfl.display.BitmapData = new openfl.display.BitmapData(width, height, true, 0x00000000);
         
-        // 4. 将舞台截图中属于副屏相机的部分，复制到新的 BitmapData 中
-        bottomBitmap.copyPixels(
-            stageBitmap, 
-            new openfl.geom.Rectangle(bottomCam.x, bottomCam.y, width, height), 
-            new openfl.geom.Point(0, 0)
-        );
+        // 3. 将当前游戏舞台的画面绘制到这个 BitmapData 上
+        FlxG.stage.draw(bottomBitmap);
 
-        // 5. 提取像素数据并发送到 Java 层
+        // 4. 提取像素数据并发送到 Java 层
         var pixels:haxe.io.Bytes = bottomBitmap.getPixels(bottomBitmap.rect);
         Main.updateBottomScreen(pixels, width, height);
-		
-		 // 6. 及时清理内存，防止每帧调用导致内存泄漏
-        stageBitmap.dispose();
+
+        // 5. 及时清理内存，防止每帧调用导致内存泄漏
         bottomBitmap.dispose();
 		try
 		{
