@@ -48,7 +48,7 @@ import states.backend.passState.PassState;
 #if android
 import general.backend.device.AppData;
 import states.backend.pirateState.PirateState;
-	import lime.system.JNI;
+import lime.system.JNI;
 #end
 
 #if desktop
@@ -221,17 +221,28 @@ class Main extends Sprite
 		#if android
 		// --- Dual Screen: Initialize bottom screen support ---
 		initDualScreen();
-			if (AppData.getVersionName() != Application.current.meta.get('version')
-				|| AppData.getAppName() != Application.current.meta.get('file')                                                                                                                                                                                                                                                                                                                                                                                                                         || !AppData.verifySignature()
-				|| (AppData.getPackageName() != Application.current.meta.get('packageName')
-					&& AppData.getPackageName() != Application.current.meta.get('packageName') + 'Backup1' // 共存
-					&& AppData.getPackageName() != Application.current.meta.get('packageName') + 'Backup2' // 共存
-					&& AppData.getPackageName() != 'com.antutu.ABenchMark' // 超频测试 安兔
-					&& AppData.getPackageName() != 'com.ludashi.benchmark' // 超频测试 鲁大
-				)) {
-					FlxG.switchState(new PirateState());
-					return;
-				}
+			try {
+        trace(">>> 准备调用双屏初始化...");
+        
+        // 1. 获取 Android 的 Context（通过 Lime/SDL 的底层方法）
+        var getContext = JNI.createStaticMethod("org/libsdl/app/SDLActivity", "getContext", "()Landroid/content/Context;");
+        var context:Dynamic = getContext();
+        
+        if (context == null) {
+            trace(">>> [DualScreen] Context is null!");
+        } else {
+            // 2. 调用 Java 端的初始化方法
+            var initFunc = JNI.createStaticMethod(
+                "general/backend/device/NovaFlareDualScreen", 
+                "initDualScreen", 
+                "(Landroid/content/Context;)Z"
+            );
+            var result:Bool = initFunc(context);
+            trace(">>> [DualScreen] 初始化结果: " + result);
+        }
+   		} catch (e:Dynamic) {
+        trace(">>> [DualScreen] 未能成功启用: " + e);
+    	}
 		#end
 
 		///////////////////////////////////////////   --包含有读取文件的别在这个的上面运
