@@ -551,7 +551,7 @@ class Main extends Sprite
 		try
 		{
 			// 获取 Android Activity 上下文
-			var activity = cast openfl.Lib.current, android.app.Activity;
+			var activity = cast (openfl.Lib.current, android.app.Activity);
 			
 			// 调用 Java 方法: NovaFlareDualScreen.initDualScreen(Context)
 			var initFunc = JNI.createStaticMethod("general/backend/device/NovaFlareDualScreen", "initDualScreen", "(Landroid/app/Activity;)V");
