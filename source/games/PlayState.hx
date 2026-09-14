@@ -1,5 +1,6 @@
 package games;
 
+import openfl.display.BitmapData;
 import openfl.Lib;
 import gameanalytics.GABridge;
 
@@ -5795,43 +5796,32 @@ class PlayState extends MusicBeatState
 	 * 4. 释放临时纹理
 	 */
 	private function renderBottomScreen():Void
-	{
-		if (bottomCam == null || !Main.isDualScreen)
-			return;
+    {
+        // 1. 基础检查
+        if (bottomCam == null || !Main.isDualScreen) return;
 
-		// 使用 FlxRenderTexture 渲染 bottomCam 到纹理
-		//var renderTexture:FlxRenderTexture = new FlxRenderTexture(Std.int(bottomCam.width), Std.int(bottomCam.height));
-		//renderTexture.camera = bottomCam;
-		//renderTexture.render();
-		var renderSprite:FlxSprite = new FlxSprite();
-		renderSprite.makeGraphic(Std.int(bottomCam.width), Std.int(bottomCam.height), FlxColor.TRANSPARENT);
-		renderSprite.cameras = [bottomCam];
-		// 获取像素数据
-		//var pixels:Bytes = renderTexture.pixels.getPixels(renderTexture.pixels.rect);
-		  // 2. 临时隐藏上屏 camHUD 中的 strum 和 note
-        var hiddenElements:Array<Dynamic> = [];
-        if (camHUD != null) {
-            for (member in camHUD.members) {
-                if (member != null && (Std.isOfType(member, StrumLine) || Std.isOfType(member, Note))) {
-                    member.visible = false;
-                    hiddenElements.push(member);
-                }
-            }
-        }
+        var width:Int = Std.int(bottomCam.width);
+        var height:Int = Std.int(bottomCam.height);
+        
+        // 确保尺寸有效，防止报错
+        if (width <= 0 || height <= 0) return;
 
-        // 3. 触发副屏相机的渲染
-        bottomCam.render();
+        // 2. 创建临时 BitmapData 用于捕获副屏画面
+        var bitmapData:openfl.display.BitmapData = new openfl.display.BitmapData(width, height, true, 0x00000000);
+        
+        // 3. 使用 Flixel 提供的公开方法将相机画面绘制到 BitmapData 上
+        // 注意：这里使用 draw() 而不是 render()
+        bottomCam.draw(bitmapData);
 
-        // 4. 恢复上屏 camHUD 中 strum 和 note 的可见性
-        for (element in hiddenElements) {
-            element.visible = true;
-        }
+        // 4. 提取像素数据
+        var pixels:haxe.io.Bytes = bitmapData.getPixels(bitmapData.rect);
+        
+        // 5. 通过 JNI 发送到底层双屏系统
+        Main.updateBottomScreen(pixels, width, height);
 
-        // 5. 提取像素数据并发送到 Java 层
-        if (renderSprite.pixels != null) {
-            var pixels:Bytes = renderSprite.pixels.getPixels(renderSprite.pixels.rect);
-            Main.updateBottomScreen(pixels, Std.int(bottomCam.width), Std.int(bottomCam.height));
-        }
+        // 6. 及时清理内存，防止每帧调用导致内存泄漏
+        pixels.clear(); 
+        bitmapData.dispose(); 
 		try
 		{
 			#if !macro
@@ -5844,9 +5834,7 @@ class PlayState extends MusicBeatState
 			trace("[DualScreen] renderBottomScreen JNI call failed: " + e);
 		}
 
-		// 释放纹理
-		//renderTexture.destroy();
-		renderSprite.destroy();
+		
 	}
 	#end
 
