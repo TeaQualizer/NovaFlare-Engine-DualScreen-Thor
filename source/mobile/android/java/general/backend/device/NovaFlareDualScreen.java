@@ -11,6 +11,7 @@ import android.graphics.Paint;
 import android.graphics.Rect;
 import android.hardware.display.DisplayManager;
 import android.os.Bundle;
+import android.text.TextPaint;
 import android.util.Log;
 import android.view.Display;
 import android.view.Gravity;
