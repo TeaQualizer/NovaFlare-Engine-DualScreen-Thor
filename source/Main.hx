@@ -221,28 +221,6 @@ class Main extends Sprite
 		#if android
 		// --- Dual Screen: Initialize bottom screen support ---
 		initDualScreen();
-			try {
-        trace(">>> 准备调用双屏初始化...");
-        
-        // 1. 获取 Android 的 Context（通过 Lime/SDL 的底层方法）
-        var getContext = JNI.createStaticMethod("org/libsdl/app/SDLActivity", "getContext", "()Landroid/content/Context;");
-        var context:Dynamic = getContext();
-        
-        if (context == null) {
-            trace(">>> [DualScreen] Context is null!");
-        } else {
-            // 2. 调用 Java 端的初始化方法
-            var initFunc = JNI.createStaticMethod(
-                "general/backend/device/NovaFlareDualScreen", 
-                "initDualScreen", 
-                "(Landroid/content/Context;)Z"
-            );
-            var result:Bool = initFunc(context);
-            trace(">>> [DualScreen] 初始化结果: " + result);
-        }
-   		} catch (e:Dynamic) {
-        trace(">>> [DualScreen] 未能成功启用: " + e);
-    	}
 		#end
 
 		///////////////////////////////////////////   --包含有读取文件的别在这个的上面运
@@ -561,24 +539,32 @@ class Main extends Sprite
 		
 		try
 		{
-			// 获取 Android Activity 上下文
-			var activity:Dynamic = openfl.Lib.current;
+			// 1. 通过 SDLActivity 获取 Android Context（openfl.Lib.current 不是 Java 对象，不可用）
+			var getContext = JNI.createStaticMethod("org/libsdl/app/SDLActivity", "getContext", "()Landroid/content/Context;");
+			var context:Dynamic = getContext();
 			
-			// 调用 Java 方法: NovaFlareDualScreen.initDualScreen(Context)
-			var initFunc = JNI.createStaticMethod("general/backend/device/NovaFlareDualScreen", "initDualScreen", "(Landroid/content/Context;)Z");
-			initFunc(activity);
+			if (context == null) {
+				trace("[DualScreen] Context is null, cannot initialize.");
+				dualScreenInitialized = true;  // 标记为已尝试，防止重复调用
+				return;
+			}
 			
-			// 检查是否成功找到副屏
-			var isInitFunc = JNI.createStaticMethod("general/backend/device/NovaFlareDualScreen", "isInitialized", "()Z");
-			isDualScreen = isInitFunc();
+			// 2. 调用 Java 端的初始化方法，直接获取返回值
+			var initFunc = JNI.createStaticMethod(
+				"general/backend/device/NovaFlareDualScreen", 
+				"initDualScreen", 
+				"(Landroid/content/Context;)Z"
+			);
+			var result:Bool = initFunc(context);
 			dualScreenInitialized = true;
+			isDualScreen = result;
 			
 			if (isDualScreen)
 			{
 				trace("[DualScreen] Dual screen initialized successfully!");
-				// 设置 AYN Thor 下屏尺寸 (1080x1080, 8:7 比例)
+				// 设置 AYN Thor 下屏尺寸 (1080x1240)
 				bottomScreenWidth = 1080;
-				bottomScreenHeight = 1080;
+				bottomScreenHeight = 1240;
 				trace("[DualScreen] Bottom screen dimensions: " + bottomScreenWidth + "x" + bottomScreenHeight);
 			}
 			else
@@ -589,9 +575,10 @@ class Main extends Sprite
 		catch (e:Dynamic)
 		{
 			trace("[DualScreen] Failed to initialize: " + e);
+			dualScreenInitialized = true;
 		}
 	}
-
+		
 	/**
 	 * Update bottom screen with HUD pixel data
 	 * Calls NovaFlareDualScreen.updateBottomScreen(Bytes, int, int, int) in Java
