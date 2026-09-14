@@ -5800,13 +5800,15 @@ class PlayState extends MusicBeatState
 			return;
 
 		// 使用 FlxRenderTexture 渲染 bottomCam 到纹理
-		var renderTexture:FlxRenderTexture = new FlxRenderTexture(Std.int(bottomCam.width), Std.int(bottomCam.height));
-		renderTexture.camera = bottomCam;
-		renderTexture.render();
-
+		//var renderTexture:FlxRenderTexture = new FlxRenderTexture(Std.int(bottomCam.width), Std.int(bottomCam.height));
+		//renderTexture.camera = bottomCam;
+		//renderTexture.render();
+		var renderSprite:FlxSprite = new FlxSprite();
+		renderSprite.makeGraphic(Std.int(bottomCam.width), Std.int(bottomCam.height), FlxColor.TRANSPARENT);
+		bottomCam.render(renderSprite);
 		// 获取像素数据
-		var pixels:Bytes = renderTexture.pixels.getPixels(renderTexture.pixels.rect);
-
+		//var pixels:Bytes = renderTexture.pixels.getPixels(renderTexture.pixels.rect);
+		var pixels:Bytes = renderSprite.pixels.getPixels(renderSprite.pixels.rect);
 		// 通过JNI直接调用Android层方法发送像素数据到副屏
 		// NovaFlareDualScreen.updateBottomScreen(Bytes pixels, int width, int height, int displayType)
 		try
@@ -5822,7 +5824,8 @@ class PlayState extends MusicBeatState
 		}
 
 		// 释放纹理
-		renderTexture.destroy();
+		//renderTexture.destroy();
+		renderSprite.destroy();
 	}
 	#end
 
