@@ -1,190 +1,149 @@
 package general.backend.device;
 
+import android.app.Activity;
 import android.app.Presentation;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.drawable.ColorDrawable;
+import android.graphics.Paint;
+import android.graphics.Rect;
+import android.hardware.display.DisplayManager;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.Display;
-import android.view.WindowManager;
+import android.view.Gravity;
 import android.view.View;
-import haxe.io.Bytes;
+import android.view.ViewGroup;
+import android.view.WindowManager;
+import android.widget.FrameLayout;
+import android.widget.TextView;
 
-import java.util.HashMap;
-import java.util.Map;
-
-/**
- * NovaFlare Engine - AYN Thor 双屏支持桥接类
- * 
- * 该类通过 Android Presentation API 在副屏（下屏）显示 HUD 内容。
- * 
- * 放置位置：
- * 需要将此文件放在 Android 项目的 Java 源目录中：
- * android/src/main/java/general/backend/device/NovaFlareDualScreen.java
- * 
- * 或者根据你的项目包结构调整 package 声明。
- * 
- * 双屏显示原理：
- * 1. 检测可用的二级显示器（AYN Thor 的下屏）
- * 2. 创建 android.app.Presentation 绑定到副屏
- * 3. 每帧接收来自 Haxe 的像素数据并绘制到副屏
- * 
- * 参考实现：
- * - zelda3-android: SecondScreenPresentation.java
- * - tmc-android: 类似 approach
- * - dusklight: dual-screen companion code
- */
 public class NovaFlareDualScreen {
     private static final String TAG = "NovaFlareDualScreen";
     
-    /** 副屏 Presentation 实例 */
-    private static SecondScreenPresentation presentation = null;
+    private static Context applicationContext;
+    private static SecondScreenPresentation presentation;
+    private static BottomScreenView bottomView;
     
-    /** 主 Activity 上下文 */
-    private static Context applicationContext = null;
-    
-    /** 是否已初始化 */
-    private static boolean initialized = false;
-    
-    /** 副屏是否可见 */
-    private static boolean visible = true;
-    
+    // 缓存的 JNI 数据
+    private static Bitmap currentBitmap;
+    private static boolean hudInitialized = false;
+    private static float cachedHealth = 1.0f;
+    private static int cachedScore = 0;
+
     /**
-     * 初始化双屏功能
-     * 由 Main.hx 中的 initDualScreen() JNI 调用
-     * 
-     * @param context Android Context
+     * 初始化双屏支持 (由 Haxe 端通过 JNI 调用)
      */
-    public static void initDualScreen(Context context) {
-        applicationContext = context.getApplicationContext();
-        
+    public static boolean initDualScreen(Context context) {
         try {
-            // 获取 WindowManager 来检测显示器
-            WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
-            
-            // 获取所有已连接的显示器
-            Display[] displays = wm.getDisplays();
-            boolean foundSecondary = false;
-            
-            for (Display display : displays) {
-                int displayId = display.getDisplayId();
-                
-                // 跳过主显示器（Display.DEFAULT_DISPLAY = 0）
-                if (displayId == Display.DEFAULT_DISPLAY) {
-                    Log.d(TAG, "Skipping default display: " + displayId);
-                    continue;
-                }
-                
-                // 找到副屏！创建 Presentation
-                Log.d(TAG, "Found secondary display: " + display.getName() 
-                      + " (id=" + displayId + ", " + display.getWidth() + "x" + display.getHeight() + ")");
-                
-                // 创建并显示 Presentation
-                showPresentation(display);
-                foundSecondary = true;
-                break; // 只使用第一个找到的副屏
+            // 【核心修复 1】：将 Context 的处理完全移入 try-catch 块内，防止 NPE 穿透到 JNI 层
+            if (context == null) {
+                Log.e(TAG, "[DualScreen] Context is null, cannot initialize.");
+                return false;
             }
             
-            if (!foundSecondary) {
-                Log.w(TAG, "No secondary display found. Dual screen mode disabled.");
+            applicationContext = context.getApplicationContext();
+            
+            DisplayManager displayManager = (DisplayManager) applicationContext.getSystemService(Context.DISPLAY_SERVICE);
+            if (displayManager == null) {
+                Log.e(TAG, "[DualScreen] DisplayManager is null.");
+                return false;
+            }
+
+            Display[] displays = displayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION);
+            Log.i(TAG, "[DualScreen] Found " + displays.length + " presentation displays.");
+
+            if (displays.length > 0) {
+                // 优先使用第一个副屏
+                Display secondaryDisplay = displays[0];
+                presentation = new SecondScreenPresentation(applicationContext, secondaryDisplay);
+                
+                presentation.setOnDismissListener(new DialogInterface.OnDismissListener() {
+                    @Override
+                    public void onDismiss(DialogInterface dialog) {
+                        Log.i(TAG, "[DualScreen] Presentation dismissed.");
+                        presentation = null;
+                        bottomView = null;
+                    }
+                });
+                
+                presentation.show();
+                Log.i(TAG, "[DualScreen] Initialized successfully on display: " + secondaryDisplay.getName());
+                return true;
             } else {
-                initialized = true;
-                Log.d(TAG, "Dual screen initialized successfully!");
+                Log.w(TAG, "[DualScreen] No secondary presentation displays found.");
+                return false;
             }
         } catch (Exception e) {
-            Log.e(TAG, "Failed to initialize dual screen", e);
+            Log.e(TAG, "[DualScreen] Failed to initialize dual screen", e);
+            return false;
         }
     }
-    
+
     /**
-     * 在副屏上显示 Presentation
+     * 更新副屏画面 (由 Haxe 端每帧通过 JNI 调用)
+     * 【核心修复 2】：将参数类型从 haxe.io.Bytes 改为 Object，并在内部安全转换为 byte[]
      */
-    private static void showPresentation(Display display) {
-        if (applicationContext == null) return;
-        
+    public static void updateBottomScreen(Object pixels, int width, int height, int format) {
+        if (bottomView == null || pixels == null) return;
+
         try {
-            // 创建自定义的 Presentation
-            presentation = new SecondScreenPresentation(applicationContext, display);
-            presentation.getWindow().setBackgroundDrawable(new ColorDrawable(Color.BLACK));
-            presentation.show();
-            
-            Log.d(TAG, "Presentation shown on display: " + display.getDisplayId());
+            byte[] pixelArray;
+            // 安全地检查并转换类型
+            if (pixels instanceof byte[]) {
+                pixelArray = (byte[]) pixels;
+            } else {
+                Log.w(TAG, "[DualScreen] Received unsupported pixel data type: " + pixels.getClass().getName());
+                return;
+            }
+
+            // 创建或复用 Bitmap
+            if (currentBitmap == null || currentBitmap.getWidth() != width || currentBitmap.getHeight() != height) {
+                if (currentBitmap != null) {
+                    currentBitmap.recycle();
+                }
+                currentBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+            }
+
+            // 将字节数组复制到 Bitmap
+            currentBitmap.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(pixelArray));
+
+            // 通知 View 刷新
+            bottomView.updateBitmap(currentBitmap);
+
         } catch (Exception e) {
-            Log.e(TAG, "Failed to show presentation", e);
+            Log.e(TAG, "[DualScreen] Failed to update bottom screen bitmap", e);
         }
     }
-    
+
     /**
-     * 更新下屏画面
-     * 由 Main.hx 中的 updateBottomScreen() JNI 调用
-     * 
-     * @param pixels 像素数据（ARGB_8888 格式）
-     * @param width 画面宽度
-     * @param height 画面高度
-     * @param displayType 显示器类型（0=下屏）
+     * 备选方案：更新游戏状态 (如果像素传输性能不佳)
      */
-    public static void updateBottomScreen(Bytes pixels, int width, int height, int displayType) {
-        if (!initialized || presentation == null || pixels == null) return;
+    public static void updateGameState(float health, int score) {
+        cachedHealth = health;
+        cachedScore = score;
+        hudInitialized = true;
         
-        try {
-            // 将 haxe.io.Bytes 转换为 byte[]
-            byte[] byteArray = pixels.toArray();
-            
-            // 在 UI 线程中更新画面
-            presentation.updateBitmap(byteArray, width, height);
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to update bottom screen", e);
+        if (bottomView != null) {
+            bottomView.invalidate(); // 触发重绘
         }
     }
-    
+
     /**
-     * 更新游戏状态数据（备选方案：当无法渲染完整画面时使用）
-     * 由 PlayState.hx 中的备选渲染方案调用
-     * 
-     * @param health 当前健康值
-     * @param score 当前分数
-     */
-    public static void updateGameState(float health, float score) {
-        if (!initialized || presentation == null) return;
-        
-        try {
-            presentation.updateGameState(health, score);
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to update game state", e);
-        }
-    }
-    
-    /**
-     * 初始化下屏 HUD（由 PlayState.hx 调用）
-     */
-    public static void initBottomScreen() {
-        if (!initialized || presentation == null) return;
-        
-        try {
-            presentation.initHUD();
-            Log.d(TAG, "Bottom screen HUD initialized");
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to init bottom screen HUD", e);
-        }
-    }
-    
-    /**
-     * 设置下屏可见性
-     * 
-     * @param visible 是否可见
+     * 设置副屏可见性
      */
     public static void setBottomScreenVisible(boolean visible) {
-        NovaFlareDualScreen.visible = visible;
-        
         if (presentation != null) {
-            presentation.setVisibility(visible ? View.VISIBLE : View.GONE);
-            Log.d(TAG, "Bottom screen visibility set to: " + visible);
+            if (visible) {
+                presentation.show();
+            } else {
+                presentation.dismiss();
+            }
         }
     }
-    
+
     /**
      * 销毁双屏资源
      */
@@ -193,211 +152,115 @@ public class NovaFlareDualScreen {
             presentation.dismiss();
             presentation = null;
         }
-        initialized = false;
-        Log.d(TAG, "Dual screen destroyed");
+        if (currentBitmap != null) {
+            currentBitmap.recycle();
+            currentBitmap = null;
+        }
+        bottomView = null;
+        hudInitialized = false;
     }
-    
+
     /**
-     * 获取双屏是否已初始化
+     * 检查是否已初始化
      */
     public static boolean isInitialized() {
-        return initialized;
+        return presentation != null && bottomView != null;
     }
-    
-    // ============================================================
-    // 内部类：副屏 Presentation
-    // ============================================================
-    
-    /**
-     * 副屏显示窗口
-     * 继承 android.app.Presentation 以在二级显示器上显示内容
-     * 
-     * 参考 zelda3-android 的 SecondScreenPresentation.java 实现
-     */
+
+    // ==========================================
+    // 内部类：副屏 Presentation 窗口
+    // ==========================================
     private static class SecondScreenPresentation extends Presentation {
-        private BottomScreenView bottomView;
-        private Bitmap currentBitmap = null;
-        private int bitmapWidth = 0;
-        private int bitmapHeight = 0;
-        private float health = 1.0f;
-        private float score = 0.0f;
-        private boolean hudInitialized = false;
-        
         public SecondScreenPresentation(Context context, Display display) {
             super(context, display);
         }
-        
+
         @Override
         protected void onCreate(Bundle savedInstanceState) {
             super.onCreate(savedInstanceState);
             
-            // 设置窗口属性
-            if (getWindow() != null) {
-                getWindow().setBackgroundDrawable(new ColorDrawable(Color.BLACK));
-                getWindow().setLayout(
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.MATCH_PARENT
-                );
-                
-                // 保持屏幕常亮
-                getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-                
-                // 非焦点模式：确保游戏窗口的游戏手柄输入不受影响
-                getWindow().addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
-                
-                // 全屏模式：隐藏导航栏和状态栏
-                getWindow().getDecorView().setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                    | View.SYSTEM_UI_FLAG_FULLSCREEN
-                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                );
-            }
-            
-            // 创建自定义的底部屏幕视图
+            // 设置全屏、非焦点、常亮
+            getWindow().setFlags(
+                WindowManager.LayoutParams.FLAG_FULLSCREEN | 
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                WindowManager.LayoutParams.FLAG_FULLSCREEN | 
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            );
+
+            // 沉浸式全屏
+            getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY |
+                View.SYSTEM_UI_FLAG_FULLSCREEN |
+                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            );
+
+            // 创建自定义 View
             bottomView = new BottomScreenView(getContext());
             setContentView(bottomView);
-            
-            Log.d(TAG, "SecondScreenPresentation created");
         }
-        
-        /**
-         * 更新画面位图
-         */
-        public void updateBitmap(byte[] pixels, int width, int height) {
-            if (!visible) return;
+    }
+
+    // ==========================================
+    // 内部类：副屏渲染 View
+    // ==========================================
+    private static class BottomScreenView extends View {
+        private Bitmap bitmap;
+        private Paint paint;
+        private Rect srcRect;
+        private Rect dstRect;
+        private TextPaint textPaint;
+
+        public BottomScreenView(Context context) {
+            super(context);
+            paint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+            textPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+            textPaint.setColor(Color.WHITE);
+            textPaint.setTextSize(48f);
+            textPaint.setTextAlign(Paint.Align.CENTER);
             
-            this.bitmapWidth = width;
-            this.bitmapHeight = height;
-            
-            // 将像素数据转换为 Bitmap
-            if (currentBitmap == null 
-                || currentBitmap.getWidth() != width 
-                || currentBitmap.getHeight() != height) {
-                
-                if (currentBitmap != null) {
-                    currentBitmap.recycle();
-                }
-                
-                currentBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-            }
-            
-            // 将 byte[] 数据填充到 Bitmap
-            currentBitmap.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(pixels));
-            
-            // 请求重绘
-            bottomView.invalidate();
+            setBackgroundColor(Color.BLACK);
         }
-        
-        /**
-         * 更新游戏状态数据（备选方案）
-         */
-        public void updateGameState(float health, float score) {
-            this.health = health;
-            this.score = score;
-            
-            if (!hudInitialized) {
-                hudInitialized = true;
-            }
-            
-            bottomView.invalidate();
+
+        public void updateBitmap(Bitmap bmp) {
+            this.bitmap = bmp;
+            invalidate(); // 请求重绘
         }
-        
-        /**
-         * 初始化 HUD
-         */
-        public void initHUD() {
-            hudInitialized = true;
-            bottomView.invalidate();
-        }
-        
-        /**
-         * 设置可见性
-         */
+
         @Override
-        public void setVisibility(int visibility) {
-            super.setVisibility(visibility);
-            if (bottomView != null) {
-                bottomView.setVisibility(visibility);
-            }
-        }
-        
-        /**
-         * 自定义视图：在副屏上绘制内容
-         */
-        private class BottomScreenView extends View {
-            private final android.graphics.Paint paint = new android.graphics.Paint();
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
             
-            public BottomScreenView(Context context) {
-                super(context);
-                setFocusable(false); // 不获取焦点，不影响游戏输入
-                setClickable(false);
-            }
-            
-            @Override
-            protected void onDraw(Canvas canvas) {
-                super.onDraw(canvas);
-                
-                int width = canvas.getWidth();
-                int height = canvas.getHeight();
-                
-                // 绘制背景
-                canvas.drawColor(Color.BLACK);
-                
-                // 如果有画面位图，绘制它
-                if (currentBitmap != null && !currentBitmap.isRecycled()) {
-                    // 计算缩放以填充屏幕（保持宽高比）
-                    float bitmapRatio = (float) currentBitmap.getWidth() / currentBitmap.getHeight();
-                    float viewRatio = (float) width / height;
-                    
-                    int drawWidth, drawHeight, offsetX, offsetY;
-                    
-                    if (bitmapRatio > viewRatio) {
-                        // 位图更宽，以宽度为基准
-                        drawWidth = width;
-                        drawHeight = width / (int) bitmapRatio;
-                        offsetX = 0;
-                        offsetY = (height - drawHeight) / 2;
-                    } else {
-                        // 位图更高，以高度为基准
-                        drawHeight = height;
-                        drawWidth = height * (int) bitmapRatio;
-                        offsetX = (width - drawWidth) / 2;
-                        offsetY = 0;
-                    }
-                    
-                    canvas.drawBitmap(currentBitmap, offsetX, offsetY, paint);
-                } else if (hudInitialized) {
-                    // 没有位图时，绘制简化 HUD 信息
-                    drawSimpleHUD(canvas, width, height);
+            int viewWidth = getWidth();
+            int viewHeight = getHeight();
+
+            // 优先绘制 Bitmap 画面
+            if (bitmap != null && !bitmap.isRecycled()) {
+                if (srcRect == null) {
+                    srcRect = new Rect();
+                    dstRect = new Rect();
                 }
-            }
-            
-            /**
-             * 绘制简化的 HUD 信息（备选方案）
-             */
-            private void drawSimpleHUD(Canvas canvas, int width, int height) {
-                android.graphics.Paint textPaint = new android.graphics.Paint();
-                textPaint.setColor(Color.WHITE);
-                textPaint.setTextSize(48);
-                textPaint.setAntiAlias(true);
+                srcRect.set(0, 0, bitmap.getWidth(), bitmap.getHeight());
                 
-                // 绘制健康值
-                String healthText = "Health: " + String.format("%.1f", health * 100) + "%";
-                canvas.drawText(healthText, 50, 80, textPaint);
+                // 等比缩放居中
+                float scale = Math.min((float) viewWidth / bitmap.getWidth(), (float) viewHeight / bitmap.getHeight());
+                int scaledWidth = (int) (bitmap.getWidth() * scale);
+                int scaledHeight = (int) (bitmap.getHeight() * scale);
                 
-                // 绘制分数
-                String scoreText = "Score: " + String.valueOf((int) score);
-                canvas.drawText(scoreText, 50, 140, textPaint);
+                int left = (viewWidth - scaledWidth) / 2;
+                int top = (viewHeight - scaledHeight) / 2;
+                dstRect.set(left, top, left + scaledWidth, top + scaledHeight);
                 
-                // 绘制提示文字
-                android.graphics.Paint hintPaint = new android.graphics.Paint();
-                hintPaint.setColor(Color.GRAY);
-                hintPaint.setTextSize(32);
-                String hint = "HUD Display (Bitmap mode unavailable)";
-                canvas.drawText(hint, 50, height - 50, hintPaint);
+                canvas.drawBitmap(bitmap, srcRect, dstRect, paint);
+            } 
+            // 备选方案：绘制简化 HUD
+            else if (hudInitialized) {
+                canvas.drawText("Health: " + String.format("%.0f%%", cachedHealth * 100), viewWidth / 2f, viewHeight / 2f - 40, textPaint);
+                canvas.drawText("Score: " + cachedScore, viewWidth / 2f, viewHeight / 2f + 40, textPaint);
             }
         }
     }
