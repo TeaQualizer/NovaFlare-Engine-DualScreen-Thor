@@ -5795,7 +5795,7 @@ class PlayState extends MusicBeatState
 	 * 3. 通过 JNI 调用 NovaFlareDualScreen.updateBottomScreen() 发送到副屏
 	 * 4. 释放临时纹理
 	 */
-	private function renderBottomScreen():Void
+	 private function renderBottomScreen():Void
     {
         // 1. 基础检查
         if (bottomCam == null || !Main.isDualScreen) return;
@@ -5803,25 +5803,29 @@ class PlayState extends MusicBeatState
         var width:Int = Std.int(bottomCam.width);
         var height:Int = Std.int(bottomCam.height);
         
-        // 确保尺寸有效，防止报错
+        // 确保尺寸有效，防止底层崩溃
         if (width <= 0 || height <= 0) return;
 
-        // 2. 创建临时 BitmapData 用于捕获副屏画面
-        var bitmapData:openfl.display.BitmapData = new openfl.display.BitmapData(width, height, true, 0x00000000);
-        
-        // 3. 使用 Flixel 提供的公开方法将相机画面绘制到 BitmapData 上
-        // 注意：这里使用 draw() 而不是 render()
-        bottomCam.draw(bitmapData);
+        // 2. 截取整个游戏舞台的 BitmapData
+        var stageBitmap:openfl.display.BitmapData = FlxG.stage.drawToBitmapData();
 
-        // 4. 提取像素数据
-        var pixels:haxe.io.Bytes = bitmapData.getPixels(bitmapData.rect);
+        // 3. 创建一个仅包含副屏相机区域大小的 BitmapData
+        var bottomBitmap:openfl.display.BitmapData = new openfl.display.BitmapData(width, height, true, 0x00000000);
         
-        // 5. 通过 JNI 发送到底层双屏系统
+        // 4. 将舞台截图中属于副屏相机的部分，复制到新的 BitmapData 中
+        bottomBitmap.copyPixels(
+            stageBitmap, 
+            new openfl.geom.Rectangle(bottomCam.x, bottomCam.y, width, height), 
+            new openfl.geom.Point(0, 0)
+        );
+
+        // 5. 提取像素数据并发送到 Java 层
+        var pixels:haxe.io.Bytes = bottomBitmap.getPixels(bottomBitmap.rect);
         Main.updateBottomScreen(pixels, width, height);
-
-        // 6. 及时清理内存，防止每帧调用导致内存泄漏
-        pixels.clear(); 
-        bitmapData.dispose(); 
+		
+		 // 6. 及时清理内存，防止每帧调用导致内存泄漏
+        stageBitmap.dispose();
+        bottomBitmap.dispose();
 		try
 		{
 			#if !macro
