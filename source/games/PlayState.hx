@@ -5805,12 +5805,33 @@ class PlayState extends MusicBeatState
 		//renderTexture.render();
 		var renderSprite:FlxSprite = new FlxSprite();
 		renderSprite.makeGraphic(Std.int(bottomCam.width), Std.int(bottomCam.height), FlxColor.TRANSPARENT);
-		bottomCam.render(renderSprite);
+		renderSprite.cameras = [bottomCam];
 		// 获取像素数据
 		//var pixels:Bytes = renderTexture.pixels.getPixels(renderTexture.pixels.rect);
-		var pixels:Bytes = renderSprite.pixels.getPixels(renderSprite.pixels.rect);
-		// 通过JNI直接调用Android层方法发送像素数据到副屏
-		// NovaFlareDualScreen.updateBottomScreen(Bytes pixels, int width, int height, int displayType)
+		  // 2. 临时隐藏上屏 camHUD 中的 strum 和 note
+        var hiddenElements:Array<Dynamic> = [];
+        if (camHUD != null) {
+            for (member in camHUD.members) {
+                if (member != null && (Std.isOfType(member, StrumLine) || Std.isOfType(member, Note))) {
+                    member.visible = false;
+                    hiddenElements.push(member);
+                }
+            }
+        }
+
+        // 3. 触发副屏相机的渲染
+        bottomCam.render();
+
+        // 4. 恢复上屏 camHUD 中 strum 和 note 的可见性
+        for (element in hiddenElements) {
+            element.visible = true;
+        }
+
+        // 5. 提取像素数据并发送到 Java 层
+        if (renderSprite.pixels != null) {
+            var pixels:Bytes = renderSprite.pixels.getPixels(renderSprite.pixels.rect);
+            Main.updateBottomScreen(pixels, Std.int(bottomCam.width), Std.int(bottomCam.height));
+        }
 		try
 		{
 			#if !macro
