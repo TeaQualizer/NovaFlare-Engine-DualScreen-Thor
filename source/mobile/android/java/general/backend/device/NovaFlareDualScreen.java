@@ -80,19 +80,33 @@ public class NovaFlareDualScreen {
             }
 
             if (secondaryDisplay != null) {
-                presentation = new SecondScreenPresentation(applicationContext, secondaryDisplay);
+                final Display finalSecondaryDisplay = secondaryDisplay;
                 
-                presentation.setOnDismissListener(new DialogInterface.OnDismissListener() {
+                // 【核心修复 3】：Presentation 必须在主线程创建！
+                // 使用主线程的 Looper 将任务 post 到 UI 线程执行
+                new android.os.Handler(android.os.Looper.getMainLooper()).post(new Runnable() {
                     @Override
-                    public void onDismiss(DialogInterface dialog) {
-                        Log.i(TAG, "[DualScreen] Presentation dismissed.");
-                        presentation = null;
-                        bottomView = null;
+                    public void run() {
+                        try {
+                            presentation = new SecondScreenPresentation(applicationContext, finalSecondaryDisplay);
+                            
+                            presentation.setOnDismissListener(new DialogInterface.OnDismissListener() {
+                                @Override
+                                public void onDismiss(DialogInterface dialog) {
+                                    Log.i(TAG, "[DualScreen] Presentation dismissed.");
+                                    presentation = null;
+                                    bottomView = null;
+                                }
+                            });
+                            
+                            presentation.show();
+                            Log.i(TAG, "[DualScreen] Initialized successfully on display ID: " + finalSecondaryDisplay.getDisplayId());
+                        } catch (Exception e) {
+                            Log.e(TAG, "[DualScreen] Failed to show Presentation on main thread", e);
+                        }
                     }
                 });
                 
-                presentation.show();
-                Log.i(TAG, "[DualScreen] Initialized successfully on display ID: " + secondaryDisplay.getDisplayId());
                 return true;
             } else {
                 Log.w(TAG, "[DualScreen] AYN Thor bottom screen (ID 4 or 1080x1240) NOT found.");
