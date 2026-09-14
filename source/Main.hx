@@ -48,7 +48,7 @@ import states.backend.passState.PassState;
 #if android
 import general.backend.device.AppData;
 import states.backend.pirateState.PirateState;
-import lime.system.JNI;
+	import lime.system.JNI;
 #end
 
 #if desktop
@@ -81,10 +81,15 @@ class Main extends Sprite
 	public static var fpsVar:FPSViewer;
 	public static var watermark:Watermark;
 	private static var replayOverlay:ReplayOverlay;
-	public static var isDualScreen:Bool = false;
 
 	#if android
 	private var mobileViewportGame:FlxGame;
+	#end
+	#if android
+	public static var isDualScreen:Bool = false;
+	public static var bottomScreenHeight:Int = 0;
+	public static var bottomScreenWidth:Int = 0;
+	private static var dualScreenInitialized:Bool = false;
 	#end
 
 	public static function getReplayOverlay():ReplayOverlay
@@ -102,7 +107,6 @@ class Main extends Sprite
 
 	public static function main():Void
 	{
-		
 		OriginFunkinMode.detect();
 		#if CODENAME_ENGINE_COMPAT
 		CodeNameMode.detect();
@@ -130,13 +134,6 @@ class Main extends Sprite
 		SUtil.doPermissionsShit();
 		setupMobileStorage();
 		mobile.backend.CrashHandler.refreshNativeCrashDirectory();
-		try {
-            var initFunc = JNI.createStaticMethod("general/backend/device/NovaFlareDualScreen", "initDualScreen", "(Landroid/app/Activity;)Z");
-            isDualScreen = initFunc(openfl.system.System.getApplicationDomain().get("activity"));
-        } catch (e:Dynamic) {
-            trace("DualScreen Init Failed: " + e);
-            isDualScreen = false;
-        }
 		#end
 		mobile.backend.CrashHandler.init();
 		gameanalytics.GAAppLifecycle.install();
@@ -152,38 +149,6 @@ class Main extends Sprite
 		#if VIDEOS_ALLOWED
 		hxvlc.util.Handle.init(#if (hxvlc >= "1.8.0") ['--no-lua'] #end);
 		#end
-		#if android
-    	public static function updateBottomScreen(pixels: Array<Int>, width: Int, height: Int): Void
-		{
-    	if (!isDualScreen) return;
-
-    	try {
-        // 1. 获取 Activity 实例 (通常 Main.hx 会保存这个引用，或者通过 JNI 获取)
-        // 注意：如果你的 updateBottomScreen 是静态方法且不需要 Context，可以忽略这一步。
-        // 但通常更新屏幕需要 View 或 Surface，建议检查 Java 端是否需要传入 Activity/Context。
-        // 这里假设 Java 端已经初始化好了静态变量，或者你通过其他方式获取了 Context。
-
-        // 2. 修正后的 JNI 调用
-        // 签名解释：
-        // [I  -> int[] (像素数组)
-        // I   -> int (宽)
-        // I   -> int (高)
-        // Z   -> boolean (你代码里传了 false，所以签名要加上 Z)
-        // V   -> void (返回值)
-        var updateFunc = JNI.createStaticMethod(
-            "general/backend/device/NovaFlareDualScreen",
-            "updateBottomScreen",
-            "([IIIZ)V"
-        );
-
-        // 3. 执行调用
-        updateFunc(pixels, width, height, false);
-
-    	} catch (e: Dynamic) {
-    	trace("DualScreen Update Failed: " + e);
-    }
-}
-    	#end					   
 	}
 
 	private function init(?E:Event):Void
@@ -254,6 +219,8 @@ class Main extends Sprite
 		Controls.instance = new Controls();
 
 		#if android
+		// --- Dual Screen: Initialize bottom screen support ---
+		initDualScreen();
 			if (AppData.getVersionName() != Application.current.meta.get('version')
 				|| AppData.getAppName() != Application.current.meta.get('file')                                                                                                                                                                                                                                                                                                                                                                                                                         || !AppData.verifySignature()
 				|| (AppData.getPackageName() != Application.current.meta.get('packageName')
@@ -455,6 +422,11 @@ class Main extends Sprite
 		// BACK-key policy here before any Codename menu starts handling it.
 		FlxG.android.preventDefaultKeys = [BACK];
 		#end
+
+		#if android
+		// --- Dual Screen: Initialize bottom screen for Codename mode ---
+		initDualScreen();
+		#end
 		// CNE normally boots straight into MainState, which initializes Conductor
 		// before the first Framerate update. NF's CNE intro delays MainState, so
 		// seed the default BPM map before ConductorInfo reads Conductor.bpm.
@@ -566,6 +538,92 @@ class Main extends Sprite
 		if (Controls.instance.justReleased('fullscreen'))
 			FlxG.fullscreen = !FlxG.fullscreen;
 	}
+
+	#if android
+	/**
+	 * Initialize dual screen support via JNI
+	 * Calls NovaFlareDualScreen.initDualScreen(Context) in Java
+	 */
+	private static function initDualScreen():Void
+	{
+		if (dualScreenInitialized) return;
+		
+		try
+		{
+			// 获取 Android Activity 上下文
+			var activity = cast openfl.Lib.current, android.app.Activity;
+			
+			// 调用 Java 方法: NovaFlareDualScreen.initDualScreen(Context)
+			var initFunc = JNI.createStaticMethod("general/backend/device/NovaFlareDualScreen", "initDualScreen", "(Landroid/app/Activity;)V");
+			initFunc(activity);
+			
+			// 检查是否成功找到副屏
+			var isInitFunc = JNI.createStaticMethod("general/backend/device/NovaFlareDualScreen", "isInitialized", "()Z");
+			isDualScreen = isInitFunc();
+			dualScreenInitialized = true;
+			
+			if (isDualScreen)
+			{
+				trace("[DualScreen] Dual screen initialized successfully!");
+				// 设置 AYN Thor 下屏尺寸 (1080x1080, 8:7 比例)
+				bottomScreenWidth = 1080;
+				bottomScreenHeight = 1080;
+				trace("[DualScreen] Bottom screen dimensions: " + bottomScreenWidth + "x" + bottomScreenHeight);
+			}
+			else
+			{
+				trace("[DualScreen] No secondary display found, dual screen disabled");
+			}
+		}
+		catch (e:Dynamic)
+		{
+			trace("[DualScreen] Failed to initialize: " + e);
+		}
+	}
+
+	/**
+	 * Update bottom screen with HUD pixel data
+	 * Calls NovaFlareDualScreen.updateBottomScreen(Bytes, int, int, int) in Java
+	 *
+	 * @param pixels 像素数据 (haxe.io.Bytes, ARGB_8888 格式)
+	 * @param width 画面宽度
+	 * @param height 画面高度
+	 */
+	public static function updateBottomScreen(pixels:haxe.io.Bytes, width:Int, height:Int):Void
+	{
+		if (!isDualScreen) return;
+		
+		try
+		{
+			// 调用 Java 方法: NovaFlareDualScreen.updateBottomScreen(Bytes pixels, int width, int height, int displayType)
+			var updateFunc = JNI.createStaticMethod("general/backend/device/NovaFlareDualScreen", "updateBottomScreen", "(Lhaxe/io/Bytes;III)V");
+			updateFunc(pixels, width, height, 0);
+		}
+		catch (e:Dynamic)
+		{
+			trace("[DualScreen] Failed to update bottom screen: " + e);
+		}
+	}
+
+	/**
+	 * Set bottom screen visibility
+	 * Calls NovaFlareDualScreen.setBottomScreenVisible(boolean) in Java
+	 *
+	 * @param visible 是否可见
+	 */
+	public static function setBottomScreenVisible(visible:Bool):Void
+	{
+		try
+		{
+			var setFunc = JNI.createStaticMethod("general/backend/device/NovaFlareDualScreen", "setBottomScreenVisible", "(Z)V");
+			setFunc(visible);
+		}
+		catch (e:Dynamic)
+		{
+			trace("[DualScreen] Failed to set visibility: " + e);
+		}
+	}
+	#end
 }
 
 /*
@@ -596,4 +654,3 @@ May the Buddha bless you with no bugs forever
              Suppress hxcpp-zgc
 No one will be able to understand it in 500 years
 */
-
