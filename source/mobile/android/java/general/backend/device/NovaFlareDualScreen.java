@@ -53,12 +53,33 @@ public class NovaFlareDualScreen {
                 return false;
             }
 
-            Display[] displays = displayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION);
-            Log.i(TAG, "[DualScreen] Found " + displays.length + " presentation displays.");
+            // 【核心修复 2】：不再依赖 PRESENTATION 类别，直接遍历所有屏幕寻找下屏
+            Display[] displays = displayManager.getDisplays();
+            Display secondaryDisplay = null;
+            
+            Log.i(TAG, "[DualScreen] Total displays found: " + displays.length);
+            
+            for (Display display : displays) {
+                Log.i(TAG, "[DualScreen] Checking Display ID: " + display.getDisplayId() + ", Name: " + display.getName());
+                
+                // 方案 A：精准匹配 AYN Thor 下屏的 Display ID (根据 logcat 为 4)
+                if (display.getDisplayId() == 4) {
+                    secondaryDisplay = display;
+                    Log.i(TAG, "[DualScreen] Found AYN Thor bottom screen by ID 4!");
+                    break;
+                }
+                
+                // 方案 B：备用匹配（通过分辨率 1080x1240 寻找）
+                android.graphics.Point size = new android.graphics.Point();
+                display.getRealSize(size);
+                if ((size.x == 1080 && size.y == 1240) || (size.x == 1240 && size.y == 1080)) {
+                    secondaryDisplay = display;
+                    Log.i(TAG, "[DualScreen] Found bottom screen by resolution: " + size.x + "x" + size.y);
+                    break;
+                }
+            }
 
-            if (displays.length > 0) {
-                // 优先使用第一个副屏
-                Display secondaryDisplay = displays[0];
+            if (secondaryDisplay != null) {
                 presentation = new SecondScreenPresentation(applicationContext, secondaryDisplay);
                 
                 presentation.setOnDismissListener(new DialogInterface.OnDismissListener() {
@@ -71,10 +92,10 @@ public class NovaFlareDualScreen {
                 });
                 
                 presentation.show();
-                Log.i(TAG, "[DualScreen] Initialized successfully on display: " + secondaryDisplay.getName());
+                Log.i(TAG, "[DualScreen] Initialized successfully on display ID: " + secondaryDisplay.getDisplayId());
                 return true;
             } else {
-                Log.w(TAG, "[DualScreen] No secondary presentation displays found.");
+                Log.w(TAG, "[DualScreen] AYN Thor bottom screen (ID 4 or 1080x1240) NOT found.");
                 return false;
             }
         } catch (Exception e) {
@@ -85,7 +106,7 @@ public class NovaFlareDualScreen {
 
     /**
      * 更新副屏画面 (由 Haxe 端每帧通过 JNI 调用)
-     * 【核心修复 2】：将参数类型从 haxe.io.Bytes 改为 Object，并在内部安全转换为 byte[]
+     * 【核心修复 3】：将参数类型从 haxe.io.Bytes 改为 Object，并在内部安全转换为 byte[]
      */
     public static void updateBottomScreen(Object pixels, int width, int height, int format) {
         if (bottomView == null || pixels == null) return;
