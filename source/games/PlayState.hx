@@ -23,8 +23,10 @@ import flixel.animation.FlxAnimationController;
 import flixel.input.touch.FlxTouch;
 import flixel.graphics.FlxGraphic;
 #if android
-import flixel.ui.FlxBar;
-import flixel.ui.FlxBar.FlxBarFillDirection; // 新增导入
+	import flixel.ui.FlxBar;
+	import haxe.io.Bytes;
+	import lime.system.JNI;
+	import flixel.ui.FlxBar.FlxBarFillDirection; // 新增导入
 #end
 
 import modchart.Manager;
@@ -2902,6 +2904,10 @@ class PlayState extends MusicBeatState
 		}
 		
 		super.drawUpdate(elapsed);
+
+		#if android
+		renderBottomScreen();
+		#end
 	}
 
 	#if debug
@@ -5776,4 +5782,48 @@ class PlayState extends MusicBeatState
 		}
 		return false;
 	}
+
+	#if android
+	/**
+	 * 渲染下屏内容并通过JNI发送到Android副屏
+	 * 参考实现: zelda3-android, tmc-android, dusklight 的双屏方案
+	 * 
+	 * 流程:
+	 * 1. 使用 FlxRenderTexture 渲染 bottomCam 到离屏纹理
+	 * 2. 提取像素数据 (haxe.io.Bytes)
+	 * 3. 通过 JNI 调用 NovaFlareDualScreen.updateBottomScreen() 发送到副屏
+	 * 4. 释放临时纹理
+	 */
+	private function renderBottomScreen():Void
+	{
+		if (bottomCam == null || !Main.isDualScreen)
+			return;
+
+		// 使用 FlxRenderTexture 渲染 bottomCam 到纹理
+		var renderTexture:FlxRenderTexture = new FlxRenderTexture(Std.int(bottomCam.width), Std.int(bottomCam.height));
+		renderTexture.camera = bottomCam;
+		renderTexture.render();
+
+		// 获取像素数据
+		var pixels:Bytes = renderTexture.pixels.getPixels(renderTexture.pixels.rect);
+
+		// 通过JNI直接调用Android层方法发送像素数据到副屏
+		// NovaFlareDualScreen.updateBottomScreen(Bytes pixels, int width, int height, int displayType)
+		try
+		{
+			#if !macro
+			var updateFunc = JNI.createStaticMethod("general/backend/device/NovaFlareDualScreen", "updateBottomScreen", "(haxe/io/Bytes;III)V");
+			updateFunc(pixels, Std.int(bottomCam.width), Std.int(bottomCam.height), 0);
+			#end
+		}
+		catch (e:Dynamic)
+		{
+			trace("[DualScreen] renderBottomScreen JNI call failed: " + e);
+		}
+
+		// 释放纹理
+		renderTexture.destroy();
+	}
+	#end
+
 }
