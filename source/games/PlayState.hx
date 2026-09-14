@@ -5810,8 +5810,8 @@ class PlayState extends MusicBeatState
         var bottomBitmap:openfl.display.BitmapData = new openfl.display.BitmapData(width, height, true, 0x00000000);
         
         // 3. 将当前游戏舞台的画面绘制到这个 BitmapData 上
-        FlxG.stage.draw(bottomBitmap);
-
+        FlxG.stage.drawToBitmapData(bottomBitmap);
+		
         // 4. 提取像素数据并发送到 Java 层
         var pixels:haxe.io.Bytes = bottomBitmap.getPixels(bottomBitmap.rect);
         Main.updateBottomScreen(pixels, width, height);
