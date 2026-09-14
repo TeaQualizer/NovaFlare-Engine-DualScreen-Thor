@@ -81,6 +81,7 @@ class Main extends Sprite
 	public static var fpsVar:FPSViewer;
 	public static var watermark:Watermark;
 	private static var replayOverlay:ReplayOverlay;
+	public static var isDualScreen:Bool = false;
 
 	#if android
 	private var mobileViewportGame:FlxGame;
@@ -101,7 +102,7 @@ class Main extends Sprite
 
 	public static function main():Void
 	{
-		public static var isDualScreen:Bool = false;
+		
 		OriginFunkinMode.detect();
 		#if CODENAME_ENGINE_COMPAT
 		CodeNameMode.detect();
