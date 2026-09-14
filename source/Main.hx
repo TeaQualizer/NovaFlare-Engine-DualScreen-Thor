@@ -554,7 +554,7 @@ class Main extends Sprite
 			var activity:Dynamic = openfl.Lib.current;
 			
 			// 调用 Java 方法: NovaFlareDualScreen.initDualScreen(Context)
-			var initFunc = JNI.createStaticMethod("general/backend/device/NovaFlareDualScreen", "initDualScreen", "(Landroid/app/Activity;)V");
+			var initFunc = JNI.createStaticMethod("general/backend/device/NovaFlareDualScreen", "initDualScreen", "(Landroid/content/Context;)Z");
 			initFunc(activity);
 			
 			// 检查是否成功找到副屏
@@ -596,7 +596,7 @@ class Main extends Sprite
 		try
 		{
 			// 调用 Java 方法: NovaFlareDualScreen.updateBottomScreen(Bytes pixels, int width, int height, int displayType)
-			var updateFunc = JNI.createStaticMethod("general/backend/device/NovaFlareDualScreen", "updateBottomScreen", "(Lhaxe/io/Bytes;III)V");
+			var updateFunc = JNI.createStaticMethod("general/backend/device/NovaFlareDualScreen", "updateBottomScreen", "(Ljava/lang/Object;III)V");
 			updateFunc(pixels, width, height, 0);
 		}
 		catch (e:Dynamic)
