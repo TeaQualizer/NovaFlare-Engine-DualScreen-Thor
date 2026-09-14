@@ -48,8 +48,7 @@ import states.backend.passState.PassState;
 #if android
 import general.backend.device.AppData;
 import states.backend.pirateState.PirateState;
-	import android.content.Context;
-import  lime.system.JNI;
+import lime.system.JNI;
 #end
 
 #if desktop
@@ -80,37 +79,12 @@ class Main extends Sprite
 	};
 
 	public static var fpsVar:FPSViewer;
-    public static var watermark:Watermark;
-    private static var replayOverlay:ReplayOverlay;
+	public static var watermark:Watermark;
+	private static var replayOverlay:ReplayOverlay;
 
-    #if android
-    private var mobileViewportGame:FlxGame;
-    
-    // 2. 变量只负责定义，不负责复杂的计算（特别是依赖 stage 的计算）
-    public static var isDualScreen:Bool = false;
-    public static var bottomScreenHeight:Int = 0;
-    #end
-
-    // 3. 使用静态初始化块来处理启动时的逻辑判断
-    // 这样既符合语法，又能保证在游戏启动最早期执行
-    static function __init__() 
-    {
-        #if android
-        // 在这里进行硬编码配置（虽然不建议，但语法上必须放在这里）
-        isDualScreen = true; 
-        
-        // 注意：此时 stage 可能仍为 null，建议稍后在 create() 中计算高度
-        // 如果必须现在算，请确保 Lib.current.stage 已存在，否则这里也会崩
-        if (openfl.Lib.current != null && openfl.Lib.current.stage != null) {
-             bottomScreenHeight = Math.floor(openfl.Lib.current.stage.stageHeight * 0.35);
-        } else {
-             bottomScreenHeight = 252; // 720 * 0.35 的预设值，防止崩溃
-        }
-        
-        trace("AYN Thor Dual Screen Mode Enabled! Bottom Height: " + bottomScreenHeight);
-        #end
-    }
-
+	#if android
+	private var mobileViewportGame:FlxGame;
+	#end
 
 	public static function getReplayOverlay():ReplayOverlay
 	{
@@ -127,6 +101,7 @@ class Main extends Sprite
 
 	public static function main():Void
 	{
+		public static var isDualScreen:Bool = false;
 		OriginFunkinMode.detect();
 		#if CODENAME_ENGINE_COMPAT
 		CodeNameMode.detect();
@@ -151,8 +126,16 @@ class Main extends Sprite
 	{
 		super();
 		#if android
-		
+		SUtil.doPermissionsShit();
+		setupMobileStorage();
 		mobile.backend.CrashHandler.refreshNativeCrashDirectory();
+		try {
+            var initFunc = JNI.createStaticMethod("general/backend/device/NovaFlareDualScreen", "initDualScreen", "(Landroid/app/Activity;)Z");
+            isDualScreen = initFunc(openfl.system.System.getApplicationDomain().get("activity"));
+        } catch (e:Dynamic) {
+            trace("DualScreen Init Failed: " + e);
+            isDualScreen = false;
+        }
 		#end
 		mobile.backend.CrashHandler.init();
 		gameanalytics.GAAppLifecycle.install();
@@ -168,6 +151,18 @@ class Main extends Sprite
 		#if VIDEOS_ALLOWED
 		hxvlc.util.Handle.init(#if (hxvlc >= "1.8.0") ['--no-lua'] #end);
 		#end
+		#if android
+    	public static function updateBottomScreen(pixels:Array<Int>, width:Int, height:Int):Void
+    	{
+        if (!isDualScreen) return;
+        try {
+            var updateFunc = JNI.createStaticMethod("general/backend/device/NovaFlareDualScreen", "updateBottomScreen", "([IIIZ)V");
+            updateFunc(pixels, width, height, false);
+        } catch (e:Dynamic) {
+            trace("DualScreen Update Failed: " + e);
+        	}
+    	}
+    	#end					   
 	}
 
 	private function init(?E:Event):Void
