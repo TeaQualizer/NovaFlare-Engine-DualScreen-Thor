@@ -49,7 +49,6 @@ import states.backend.passState.PassState;
 import general.backend.device.AppData;
 import states.backend.pirateState.PirateState;
 import lime.system.JNI;
-import haxe.Timer;
 #end
 
 #if desktop
@@ -91,7 +90,6 @@ class Main extends Sprite
 	public static var bottomScreenHeight:Int = 0;
 	public static var bottomScreenWidth:Int = 0;
 	private static var dualScreenInitialized:Bool = false;
-	private static var bottomScreenReady:Bool = false;
 	#end
 
 	public static function getReplayOverlay():ReplayOverlay
@@ -573,11 +571,6 @@ class Main extends Sprite
 			{
 				trace("[DualScreen] No secondary display found, dual screen disabled");
 			}
-			// 延迟2秒后再允许下屏渲染，避免Surface/Context未就绪的竞态条件
-			Timer.delay(function() {
-				bottomScreenReady = true;
-				trace("[DualScreen] Bottom screen render enabled after 2s delay");
-			}, 2000);
 		}
 		catch (e:Dynamic)
 		{
@@ -596,7 +589,7 @@ class Main extends Sprite
 	 */
 	public static function updateBottomScreen(pixels:haxe.io.Bytes, width:Int, height:Int):Void
 	{
-		if (!isDualScreen || !bottomScreenReady) return;
+		if (!isDualScreen) return;
 		
 		try
 		{
