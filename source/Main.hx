@@ -49,7 +49,7 @@ import states.backend.passState.PassState;
 import general.backend.device.AppData;
 import states.backend.pirateState.PirateState;
 import lime.system.JNI;
-import openfl.utils.Timer;
+import haxe.Timer;
 #end
 
 #if desktop
@@ -574,7 +574,7 @@ class Main extends Sprite
 				trace("[DualScreen] No secondary display found, dual screen disabled");
 			}
 			// 延迟2秒后再允许下屏渲染，避免Surface/Context未就绪的竞态条件
-			Timer.delay(() -> {
+			Timer.delay(function() {
 				bottomScreenReady = true;
 				trace("[DualScreen] Bottom screen render enabled after 2s delay");
 			}, 2000);
@@ -652,10 +652,10 @@ class Main extends Sprite
                    `=---='
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
             佛祖保佑       永无BUG
-            	镇压hxcpp-zgc和JNI
+                镇压hxcpp-zgc
               500年内无人能看得懂
 
 May the Buddha bless you with no bugs forever
-             Suppress hxcpp-zgc and JNI
+             Suppress hxcpp-zgc
 No one will be able to understand it in 500 years
 */
