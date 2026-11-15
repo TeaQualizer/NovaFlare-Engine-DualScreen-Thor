@@ -1,5 +1,5 @@
 /*
- * Haxe side of the Thor dual-screen bridge. DIAGNOSTIC BUILD (stage 3).
+ * Haxe side of the Thor dual-screen bridge. DIAGNOSTIC BUILD (stage 5).
  *
  * Design note:
  *   An Android Presentation is a Dialog with its OWN View hierarchy, not an
@@ -13,24 +13,44 @@
  *   1. The background is sent from the RAW packaged PNG bytes (Assets.getBytes),
  *      not from BitmapData.encode(), which is unreliable in hardware render mode.
  *   2. The background is re-pushed every 3s. Previously a one-shot send could be
- *      dropped while Presentation.onCreate() was still running on the UI thread,
- *      leaving a permanently black lower screen with no error anywhere.
+ *      dropped while Presentation.onCreate() was still running on the UI thread.
  *   3. isActive() no longer hard-aborts tick(); init() is retried periodically.
  *   4. ENTER_FRAME is bound to Lib.current.stage when available.
  *
- * Stage 3 - Lua objects not appearing (this build):
+ * Stage 3 - Lua objects not appearing:
  *   1. Java no longer hides the object layer / object Views based on `menu`.
- *      A wrong inPlay guess used to blank out EVERY Lua object with no error.
- *   2. Each sprite's PNG encode is wrapped individually. Previously one bad
- *      bmp.encode() aborted the whole tick BEFORE _updateJNI(), so no update()
- *      reached Java at all and the lower screen kept showing only MenuDesat.
- *   3. The whole sync / Json.stringify / JNI block is try/catch protected and
- *      carries a `stats` object that Java prints on its diagnostic overlay.
- *   4. _frameCache is cleared whenever the background is re-pushed (every 3s),
- *      forcing a full PNG re-encode. This self-heals when the Presentation is
- *      recreated: Java's objectViews map is cleared but our frame cache still
- *      believed the PNG had already been delivered -> permanently blank ImageViews.
- *   5. SELF_TEST injects one synthetic luatext that bypasses Lua and camBottom.
+ *   2. Each sprite's image encode is wrapped individually; the whole sync /
+ *      Json.stringify / JNI block is try/catch protected and carries `stats`.
+ *   3. _frameCache is cleared whenever the background is re-pushed (3s), so a
+ *      recreated Presentation cannot leave permanently blank ImageViews.
+ *   4. SELF_TEST injects one synthetic luatext bypassing Lua and camBottom.
+ *
+ * Stage 4 - onBottom=0 on the real device:
+ *   FORCE_BY_TAG / MIRROR_ALL_IF_NONE put modchart objects on camBottom from
+ *   Haxe, so the lower screen works even if LuaUtils.cameraFromString('bottom')
+ *   is missing from the built binary.
+ *
+ * Stage 5 - sprites still blank, probe reported:
+ *   "sprites=2 texts=2 onBottom=4 byTag=4 pngOk=0 pngErr=0 len=1202
+ *    cams=bottomChar=null bottomPanel=null bottomScore=null bottomTitle=null"
+ *
+ *   THREE independent defects, all found from that one line:
+ *
+ *   (a) BitmapData.encode() produced NO bytes for the sprites - exactly the
+ *       same hardware-render failure that caused the stage-1 black screen.
+ *       len=1202 means not one PNG byte reached Java. Sprites MUST use the
+ *       same raw-Assets.getBytes() route as the background. This build sends
+ *       the whole atlas PNG once, plus a frame rectangle every tick; Java
+ *       decodes the atlas once and crops Bitmap.createBitmap() per frame.
+ *       The legacy encode() path is kept only as a fallback.
+ *
+ *   (b) .cameras was [null], not [camBottom]. LuaUtils.cameraFromString()
+ *       returned null for 'bottom' in the local build. This build repairs the
+ *       cameras array for EVERY mirrored object and reports camFixed.
+ *
+ *   (c) onCam was counted with `else if (tagMatchesBottom(...))`, so objects
+ *       with bottom* tags could NEVER increment onCam. Fixed to independent
+ *       counters, so the probe now proves whether the forced camera stuck.
  *
  * Java side has a matching DIAGNOSTICS overlay: set DIAGNOSTICS=false in
  * ThorPresentation.java, and SELF_TEST=false here, once everything is confirmed.
@@ -72,8 +92,7 @@ class ThorScreen {
 	/**
 	 * Diagnostic self-test: injects ONE synthetic text object onto the lower
 	 * screen during PlayState, bypassing Lua and camBottom completely.
-	 *   green "THOR OBJECT LAYER OK" visible -> Haxe->JNI->Java View chain is fine,
-	 *        so the fault is in Lua object creation / camera assignment;
+	 *   green "THOR OBJECT LAYER OK" visible -> Haxe->JNI->Java View chain is fine;
 	 *   NOT visible -> the fault is in syncObjects / payload / Java object layer.
 	 * Set to false once verified.
 	 */
@@ -81,29 +100,24 @@ class ThorScreen {
 	static final SELF_TEST_TAG:String = '__thor_selftest__';
 
 	/**
-	 * STAGE 4. The real-device probe reported sprites=2 texts=3 onBottom=0:
-	 * all five Lua objects existed, but NONE had camBottom in .cameras. The
-	 * Haxe -> JNI -> Java View chain was proven fine by the self test, so the
-	 * only missing link is "who puts the object on camBottom".
-	 *
-	 * These two fallbacks make the lower screen work WITHOUT relying on
-	 * LuaUtils.cameraFromString('bottom') being present in the built binary:
-	 *
-	 *  FORCE_BY_TAG: any modchart object whose tag starts with one of the
-	 *  prefixes below is assigned .cameras = [camBottom] directly from Haxe.
-	 *  camBottom.flashSprite is hidden, so the object then shows ONLY on the
-	 *  lower screen. bottom_example.lua already uses "bottom*" tags.
-	 *
-	 *  MIRROR_ALL_IF_NONE: last-resort diagnostic. If no object reached
-	 *  camBottom by either route, mirror every modchart object anyway (COPY
-	 *  only - .cameras is left alone, so the main screen is unaffected).
-	 *  This guarantees visible output even when the Lua script never called
-	 *  setObjectCamera at all. It switches itself off as soon as either of
-	 *  the proper routes starts working.
+	 * STAGE 4. Make the lower screen work WITHOUT relying on
+	 * LuaUtils.cameraFromString('bottom') being present in the built binary.
+	 *  FORCE_BY_TAG: bottom*/ds_*/thor_* tags are assigned .cameras=[camBottom]
+	 *    directly from Haxe. camBottom.flashSprite is hidden, so they show ONLY
+	 *    on the lower screen.
+	 *  MIRROR_ALL_IF_NONE: if nothing reached camBottom, mirror every modchart
+	 *    object anyway (COPY only - .cameras untouched, main screen unaffected).
 	 */
 	static final BOTTOM_TAG_PREFIXES:Array<String> = ['bottom', 'ds_', 'thor_'];
 	static final FORCE_BY_TAG:Bool = true;
 	static final MIRROR_ALL_IF_NONE:Bool = true;
+
+	/**
+	 * STAGE 5. Send sprite images as RAW packaged PNG bytes, exactly like the
+	 * background. BitmapData.encode() silently returns nothing on Android
+	 * hardware/tile render. Set false only to test the legacy encode() path.
+	 */
+	static final USE_RAW_ATLAS:Bool = true;
 
 	static var _initJNI:Null<Dynamic> = null;
 	static var _updateJNI:Null<Dynamic> = null;
@@ -118,8 +132,10 @@ class ThorScreen {
 	static var _menuPng:Null<String> = null;
 	static var _frameTarget:Null<Dynamic> = null;
 
-	/** tag -> last frame key, so animated sprites only re-encode when the frame changes. */
+	/** tag -> last frame key, so animated sprites only re-crop when the frame changes. */
 	static var _frameCache:StringMap<String> = new StringMap<String>();
+	/** tag -> 'RAW' (atlas delivered) or 'MISS' (no raw asset found, use encode fallback). */
+	static var _atlasCache:StringMap<String> = new StringMap<String>();
 	/** tags present on the previous tick, used to emit "remove" entries. */
 	static var _seen:StringMap<Bool> = new StringMap<Bool>();
 
@@ -146,7 +162,7 @@ class ThorScreen {
 		_initJNI();
 		_menuPng = loadMenuDesatPng();
 		final pngLen:Int = _menuPng != null ? _menuPng.length : 0;
-		trace('[Thor] menuDesat base64 length=$pngLen luaAllowed=${hasLua()} selfTest=$SELF_TEST');
+		trace('[Thor] menuDesat base64 length=$pngLen luaAllowed=${hasLua()} selfTest=$SELF_TEST rawAtlas=$USE_RAW_ATLAS');
 		if (_menuPng == null)
 			trace('[Thor] WARNING: no background PNG available; lower screen will show the Java diagnostic overlay only.');
 
@@ -169,6 +185,7 @@ class ThorScreen {
 		_started = false;
 		_lastBgPush = 0;
 		_frameCache = new StringMap<String>();
+		_atlasCache = new StringMap<String>();
 		_seen = new StringMap<Bool>();
 	}
 
@@ -196,8 +213,7 @@ class ThorScreen {
 		}
 
 		// Keep inPlay permissive. Java no longer hides the object layer based on
-		// `menu`, so a wrong guess here cannot blank out every Lua object. The
-		// real value is reported as stats.inPlay on the lower screen.
+		// `menu`, so a wrong guess here cannot blank out every Lua object.
 		final ps:Null<PlayState> = PlayState.instance;
 		final inPlay:Bool = ps != null && (Std.isOfType(FlxG.state, PlayState) || ps.camBottom != null);
 		final stats:Dynamic = {
@@ -213,9 +229,14 @@ class ThorScreen {
 			onCam: 0,
 			byTag: 0,
 			catchAll: false,
+			camFixed: 0,
+			rawOk: 0,
+			rawMiss: 0,
+			rectOk: 0,
 			pngOk: 0,
 			pngErr: 0,
 			cams: '',
+			src: '',
 			err: ''
 		};
 		final payload:Dynamic = {menu: !inPlay, objects: [], remove: [], stats: stats};
@@ -225,10 +246,11 @@ class ThorScreen {
 		if (_menuPng != null && now - _lastBgPush > BG_REPUSH_MS) {
 			payload.bg = _menuPng;
 			_lastBgPush = now;
-			// Force a full sprite PNG re-encode on this tick. If the Presentation
-			// was recreated, Java cleared objectViews while our cache still says
-			// "already sent", leaving permanently blank ImageViews otherwise.
+			// Force a full re-delivery of every sprite atlas on this tick. If the
+			// Presentation was recreated, Java cleared its decoded atlas cache
+			// while our cache still says "already sent" -> permanently blank.
 			_frameCache = new StringMap<String>();
+			_atlasCache = new StringMap<String>();
 		}
 
 		if (!inPlay) {
@@ -236,10 +258,10 @@ class ThorScreen {
 			for (tag in _seen.keys()) payload.remove.push(tag);
 			_seen = new StringMap<Bool>();
 			_frameCache = new StringMap<String>();
+			_atlasCache = new StringMap<String>();
 		} else {
 			// A single bad sprite must NOT abort the whole tick: otherwise no
-			// update() reaches Java at all and the lower screen shows only the
-			// background + a frozen diagnostic overlay.
+			// update() reaches Java at all and the lower screen freezes.
 			try {
 				syncObjects(payload, stats);
 			} catch (e:Dynamic) {
@@ -253,7 +275,7 @@ class ThorScreen {
 			_updateJNI(json);
 			if (now - _lastLog > LOG_MS) {
 				_lastLog = now;
-				trace('[Thor] tick inPlay=$inPlay state=${stats.state} lua=${stats.lua} camBottom=${stats.camBottom} sprites=${stats.sprites} texts=${stats.texts} onCam=${stats.onCam} byTag=${stats.byTag} catchAll=${stats.catchAll} onBottom=${stats.onBottom} pngOk=${stats.pngOk} pngErr=${stats.pngErr} objs=${payload.objects.length} jsonLen=${json.length} cams=${stats.cams} err=${stats.err}');
+				trace('[Thor] tick inPlay=$inPlay state=${stats.state} lua=${stats.lua} camBottom=${stats.camBottom} sprites=${stats.sprites} texts=${stats.texts} onCam=${stats.onCam} byTag=${stats.byTag} camFixed=${stats.camFixed} onBottom=${stats.onBottom} rawOk=${stats.rawOk} rawMiss=${stats.rawMiss} rectOk=${stats.rectOk} pngOk=${stats.pngOk} pngErr=${stats.pngErr} objs=${payload.objects.length} jsonLen=${json.length} cams=${stats.cams} src=${stats.src} err=${stats.err}');
 			}
 		} catch (e:Dynamic) {
 			trace('[Thor] Json.stringify/JNI failed: $e');
@@ -266,7 +288,7 @@ class ThorScreen {
 	/**
 	 * Signature MUST match the two-argument call in tick(). The previous build
 	 * had tick() calling syncObjects(payload, stats) while this function still
-	 * took one argument, which would fail the next Haxe compile.
+	 * took one argument, which failed the next Haxe compile.
 	 */
 	static function syncObjects(payload:Dynamic, stats:Dynamic):Void {
 		final ps:PlayState = PlayState.instance;
@@ -296,39 +318,42 @@ class ThorScreen {
 		var nOnBottom:Int = 0;
 		var nOnCam:Int = 0;
 		var nByTag:Int = 0;
+		var nCamFixed:Int = 0;
+		var nRawOk:Int = 0;
+		var nRawMiss:Int = 0;
+		var nRectOk:Int = 0;
 		var nPngOk:Int = 0;
 		var nPngErr:Int = 0;
 		var catchAll:Bool = false;
 		final dump:Array<String> = [];
+		final srcDump:Array<String> = [];
 
 		#if LUA_ALLOWED
 		// Pass 1: count every Lua object and dump the camera each one is on.
-		// The real-device probe showed sprites=2 texts=3 onBottom=0, i.e. the
-		// objects existed but were all on main-screen cameras. `cams` prints
-		// e.g. "bottomTitle=1280x720" (main) vs "=1240x1080*" (bottom).
+		// STAGE 5: onCam and byTag are INDEPENDENT counters now. The old
+		// `else if` made bottom* tags unable to ever increment onCam, so the
+		// probe falsely reported onCam=0 even after the camera was repaired.
 		try {
 			for (tag => spr in ps.modchartSprites) {
 				nSprites++;
 				if (spr == null) continue;
 				if (dump.length < 6) dump.push('$tag=${cameraLabel(spr, cam)}');
 				if (cam == null) continue;
+				if (isOnBottom(spr, cam)) nOnCam++;
 				if (tagMatchesBottom(tag)) nByTag++;
-				else if (isOnBottom(spr, cam)) nOnCam++;
 			}
 			for (tag => txt in ps.modchartTexts) {
 				nTexts++;
 				if (txt == null) continue;
 				if (dump.length < 6) dump.push('$tag=${cameraLabel(txt, cam)}');
 				if (cam == null) continue;
+				if (isOnBottom(txt, cam)) nOnCam++;
 				if (tagMatchesBottom(tag)) nByTag++;
-				else if (isOnBottom(txt, cam)) nOnCam++;
 			}
 		} catch (e:Dynamic) {
 			stats.err = 'map scan: $e';
 		}
 		stats.cams = dump.join(' ');
-		stats.onCam = nOnCam;
-		stats.byTag = nByTag;
 
 		// Last-resort diagnostic: when NOTHING reached camBottom by either
 		// route, mirror every modchart object anyway. Copy only: .cameras is
@@ -340,48 +365,88 @@ class ThorScreen {
 		if (cam != null) {
 			for (tag => spr in ps.modchartSprites) {
 				if (spr == null) continue;
-				var onCamNow:Bool = isOnBottom(spr, cam);
+				final onCamNow:Bool = isOnBottom(spr, cam);
 				final byTag:Bool = tagMatchesBottom(tag);
 				if (!onCamNow && !byTag && !catchAll) continue;
 
-				// Deterministic repair, independent of LuaUtils.cameraFromString:
-				// force this object onto camBottom from Haxe. camBottom's
-				// flashSprite is hidden, so it then appears ONLY on the lower screen.
-				if (byTag && !onCamNow && FORCE_BY_TAG) {
+				// STAGE 5(b): LuaUtils.cameraFromString('bottom') returned null in
+				// the local build, leaving .cameras == [null]. Repair it for EVERY
+				// mirrored object, not just byTag ones. If a Lua onUpdate keeps
+				// re-poisoning it, camFixed keeps climbing and the probe shows it.
+				if (camerasBroken(spr)) {
 					try {
 						spr.cameras = [cam];
+						nCamFixed++;
 					} catch (e:Dynamic) {
-						stats.err = 'force cam $tag: $e';
+						stats.err = 'fix cam $tag: $e';
 					}
+				} else if (byTag && !onCamNow && FORCE_BY_TAG) {
+					try { spr.cameras = [cam]; } catch (e:Dynamic) {}
 				}
 
 				current.set(tag, true);
 				nOnBottom++;
 
+				var atlas:Null<String> = null;
 				var png:Null<String> = null;
+				var rect:Dynamic = null;
+				var srcLabel:String = 'NONE';
 				try {
 					final frameKey:String = getFrameKey(spr);
-					if (_frameCache.get(tag) != frameKey) {
+					final needAtlas:Bool = !_atlasCache.exists(tag);
+					final needFrame:Bool = needAtlas || _frameCache.get(tag) != frameKey;
+
+					// STAGE 5(a): primary image source = raw packaged PNG bytes.
+					// The whole atlas is sent ONCE per tag (and re-sent on the 3s
+					// background repush); Java decodes it once and caches it.
+					if (needAtlas && USE_RAW_ATLAS) {
+						final raw:Null<String> = readRawAtlas(spr);
+						if (raw != null && raw.length > 0) {
+							atlas = raw;
+							_atlasCache.set(tag, 'RAW');
+							nRawOk++;
+						} else {
+							_atlasCache.set(tag, 'MISS');
+							nRawMiss++;
+						}
+					}
+
+					// Frame rectangle is tiny, so send it every tick. Java crops
+					// only when the rect changes; this is what makes animated
+					// sprites work without re-encoding a PNG per frame.
+					rect = frameRect(spr);
+					if (rect != null) nRectOk++;
+
+					// Legacy encode() path, only when no raw atlas is available.
+					if (atlas == null && _atlasCache.get(tag) != 'RAW' && needFrame) {
 						final bmp:Null<BitmapData> = getFrameBitmap(spr);
 						if (bmp != null) {
 							png = encodeBitmap(bmp);
-							_frameCache.set(tag, frameKey);
 							if (png != null && png.length > 0) nPngOk++;
 						}
 					}
+
+					_frameCache.set(tag, frameKey);
+					srcLabel = atlas != null ? 'RAW' : (_atlasCache.get(tag) == 'RAW' ? 'CROP' : 'ENC');
+					if (srcDump.length < 8) srcDump.push('$tag=$srcLabel');
 				} catch (e:Dynamic) {
 					nPngErr++;
-					stats.err = 'png $tag: $e';
-					trace('[Thor] sprite PNG failed for $tag: $e');
+					stats.err = 'img $tag: $e';
+					trace('[Thor] sprite image failed for $tag: $e');
 				}
 
-				// Push the transform even when the PNG failed. Java will create
-				// the ImageView anyway (magenta placeholder in diagnostic mode),
-				// which is a far better failure mode than nothing at all.
+				// Push the transform even when the image failed. Java now gives
+				// the ImageView explicit w/h, so the magenta placeholder is
+				// visible instead of being a 0x0 WRAP_CONTENT view.
 				try {
 					payload.objects.push({
 						tag: tag,
 						type: 'sprite',
+						atlas: atlas,
+						fx: rect != null ? rect.fx : -1,
+						fy: rect != null ? rect.fy : -1,
+						fw: rect != null ? rect.fw : -1,
+						fh: rect != null ? rect.fh : -1,
 						png: png,
 						x: spr.x,
 						y: spr.y,
@@ -402,20 +467,25 @@ class ThorScreen {
 
 			for (tag => txt in ps.modchartTexts) {
 				if (txt == null) continue;
-				var onCamNow:Bool = isOnBottom(txt, cam);
+				final onCamNow:Bool = isOnBottom(txt, cam);
 				final byTag:Bool = tagMatchesBottom(tag);
 				if (!onCamNow && !byTag && !catchAll) continue;
 
-				if (byTag && !onCamNow && FORCE_BY_TAG) {
+				if (camerasBroken(txt)) {
 					try {
 						txt.cameras = [cam];
+						nCamFixed++;
 					} catch (e:Dynamic) {
-						stats.err = 'force cam $tag: $e';
+						stats.err = 'fix cam $tag: $e';
 					}
+				} else if (byTag && !onCamNow && FORCE_BY_TAG) {
+					try { txt.cameras = [cam]; } catch (e:Dynamic) {}
 				}
 
 				current.set(tag, true);
 				nOnBottom++;
+				var txtH:Float = 0;
+				try { txtH = txt.height; } catch (e:Dynamic) {}
 				try {
 					payload.objects.push({
 						tag: tag,
@@ -424,6 +494,7 @@ class ThorScreen {
 						x: txt.x,
 						y: txt.y,
 						w: txt.fieldWidth,
+						h: txtH,
 						size: txt.size,
 						color: (txt.color : Int),
 						align: alignString(txt.alignment),
@@ -451,6 +522,7 @@ class ThorScreen {
 				x: 40,
 				y: 980,
 				w: 1160,
+				h: 40,
 				size: 26,
 				color: 0xFF00FF00,
 				align: 'left',
@@ -465,8 +537,15 @@ class ThorScreen {
 		stats.sprites = nSprites;
 		stats.texts = nTexts;
 		stats.onBottom = nOnBottom;
+		stats.onCam = nOnCam;
+		stats.byTag = nByTag;
+		stats.camFixed = nCamFixed;
+		stats.rawOk = nRawOk;
+		stats.rawMiss = nRawMiss;
+		stats.rectOk = nRectOk;
 		stats.pngOk = nPngOk;
 		stats.pngErr = nPngErr;
+		stats.src = srcDump.join(' ');
 
 		for (tag in _seen.keys()) if (!current.exists(tag)) payload.remove.push(tag);
 		_seen = current;
@@ -488,11 +567,23 @@ class ThorScreen {
 		return false;
 	}
 
+	/** null / empty / [null] cameras arrays are all broken and must be repaired. */
+	static function camerasBroken(obj:Dynamic):Bool {
+		try {
+			final cams:Array<FlxCamera> = obj.cameras;
+			if (cams == null || cams.length == 0) return true;
+			for (c in cams) if (c == null) return true;
+		} catch (e:Dynamic) {
+			return true;
+		}
+		return false;
+	}
+
 	/**
 	 * Human-readable camera assignment for the probe overlay. Dimensions are
 	 * enough to tell the cameras apart: camBottom is 1240x1080 (marked with *),
-	 * every main-screen camera is 1280x720. A "null"/"ERR" here means the
-	 * .cameras read itself failed, which was another way onBottom could be 0.
+	 * every main-screen camera is 1280x720. "null" here means the array was
+	 * null or contained a null element (stage-5 root cause (b)).
 	 */
 	static function cameraLabel(obj:Dynamic, cam:Null<FlxCamera>):String {
 		try {
@@ -525,25 +616,111 @@ class ThorScreen {
 	}
 
 	// NOTE: deliberately NOT `inline`. Haxe rejects "Cannot inline a not final
-	// return" for inline functions containing early returns (the `cams == null`
-	// guard and the `return true` inside the loop). These helpers run at 20 Hz,
-	// so losing the inline hint has no measurable cost.
+	// return" for inline functions containing early returns. These helpers run
+	// at 20 Hz, so losing the inline hint has no measurable cost.
 	static function isOnBottom(obj:Dynamic, cam:FlxCamera):Bool {
 		try {
 			final cams:Array<FlxCamera> = obj.cameras;
 			if (cams == null) return false;
 			for (c in cams) if (c == cam) return true;
 		} catch (e:Dynamic) {
-			// A mod may have replaced .cameras with something unexpected. Never
-			// let that abort the whole tick.
 			return false;
 		}
 		return false;
 	}
 
 	/**
-	 * In tile render mode useFramePixels defaults to false, so force it on and
-	 * refresh the current animation frame before reading framePixels.
+	 * STAGE 5: resolve the ORIGINAL packaged PNG for a sprite's FlxGraphic,
+	 * the same way loadMenuDesatPng() does. FlxGraphic.key is often prefixed by
+	 * Polymod ("shared:shared/images/...png"), so several candidate OpenFL
+	 * asset ids are tried. Reflect is used to stay compatible across flixel
+	 * versions without compile-time field dependencies.
+	 */
+	static function readRawAtlas(spr:FlxSprite):Null<String> {
+		try {
+			final g:Dynamic = spr.graphic;
+			if (g == null) return null;
+			final key:String = Std.string(Reflect.field(g, 'key'));
+			for (p in assetCandidates(key)) {
+				try {
+					final ba = Assets.getBytes(p);
+					if (ba != null && ba.length > 0) {
+						final bytes:haxe.io.Bytes = ba;
+						trace('[Thor] raw atlas for $key from $p (${ba.length} bytes)');
+						return Base64.encode(bytes);
+					}
+				} catch (e:Dynamic) {}
+			}
+			trace('[Thor] no raw atlas asset for $key');
+		} catch (e:Dynamic) {
+			trace('[Thor] readRawAtlas failed: $e');
+		}
+		return null;
+	}
+
+	/** Build de-duplicated OpenFL asset id candidates from a FlxGraphic key. */
+	static function assetCandidates(rawKey:Null<String>):Array<String> {
+		final out:Array<String> = [];
+		if (rawKey == null) return out;
+		var k:String = rawKey;
+		// Strip Polymod's "library:path" prefix, but keep a colon that belongs
+		// to the path itself. The .png test keeps this conservative.
+		final colon:Int = k.lastIndexOf(':');
+		if (colon >= 0 && k.indexOf('.png') > colon) k = k.substr(colon + 1);
+		final pngIdx:Int = k.toLowerCase().lastIndexOf('.png');
+		if (pngIdx < 0) return out;
+		k = k.substr(0, pngIdx + 4);
+		if (k.indexOf('/') >= 0) {
+			final file:String = k.substr(k.lastIndexOf('/') + 1);
+			pushUnique(out, k);
+			pushUnique(out, 'assets/' + k);
+			pushUnique(out, 'images/' + file);
+			pushUnique(out, 'shared/images/' + file);
+			pushUnique(out, 'assets/shared/images/' + file);
+			pushUnique(out, 'assets/images/' + file);
+		} else {
+			pushUnique(out, 'images/' + k);
+			pushUnique(out, 'shared/images/' + k);
+			pushUnique(out, 'assets/shared/images/' + k);
+			pushUnique(out, k);
+		}
+		return out;
+	}
+
+	static function pushUnique(arr:Array<String>, s:String):Void {
+		if (s == null || s.length == 0) return;
+		for (a in arr) if (a == s) return;
+		arr.push(s);
+	}
+
+	/**
+	 * Current frame rectangle inside the atlas, in source-image pixels.
+	 * Java crops Bitmap.createBitmap(atlas, fx, fy, fw, fh) from the cached
+	 * full bitmap, which replaces the broken BitmapData.encode() path.
+	 */
+	static function frameRect(spr:FlxSprite):Dynamic {
+		try {
+			final fr:Dynamic = Reflect.field(spr, 'frame');
+			if (fr == null) return null;
+			final r:Dynamic = Reflect.field(fr, 'frame');
+			if (r == null) return null;
+			final fw:Int = Math.round(r.width);
+			final fh:Int = Math.round(r.height);
+			if (fw <= 0 || fh <= 0) return null;
+			return {
+				fx: Math.round(r.x),
+				fy: Math.round(r.y),
+				fw: fw,
+				fh: fh
+			};
+		} catch (e:Dynamic) {
+			return null;
+		}
+	}
+
+	/**
+	 * Legacy fallback only. In tile render mode useFramePixels defaults to false,
+	 * so force it on and refresh the current animation frame before reading.
 	 */
 	static function getFrameBitmap(spr:FlxSprite):Null<BitmapData> {
 		try {
@@ -570,8 +747,7 @@ class ThorScreen {
 	/**
 	 * Prefer the RAW packaged PNG bytes. BitmapData.encode() re-encodes through a
 	 * CPU-side image buffer that may not exist in hardware/tile render mode, which
-	 * was one of the silent black-screen causes. No image processing needed here:
-	 * Java's BitmapFactory can decode the original bytes directly.
+	 * was one of the silent black-screen causes.
 	 */
 	static function loadMenuDesatPng():Null<String> {
 		final candidates:Array<String> = [
