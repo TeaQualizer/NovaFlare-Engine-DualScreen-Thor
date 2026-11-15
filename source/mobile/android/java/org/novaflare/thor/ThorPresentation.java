@@ -1,5 +1,7 @@
 /*
- * Drop into: source/mobile/android/java/org/novaflare/thor/ThorPresentation.java
+ * DIAGNOSTIC BUILD. A green status overlay is drawn on the lower screen so you
+ * can locate a black screen WITHOUT adb/logcat. Set DIAGNOSTICS = false once the
+ * lower screen is confirmed working.
  *
  * No Project.xml change is required: source/mobile/android/java is already a <java path>.
  * Extension.mainActivity is used exactly the same way as org.novaflare.crash.NativeCrashDialog.
@@ -44,6 +46,9 @@ import java.util.Map;
 public final class ThorPresentation {
     private static final String TAG = "ThorPresentation";
 
+    /** Turn OFF after verifying the lower screen renders. */
+    private static final boolean DIAGNOSTICS = true;
+
     /** Virtual coordinate space of camBottom. Must match ThorScreen.BOTTOM_W / BOTTOM_H. */
     public static final int VIRTUAL_W = 1240;
     public static final int VIRTUAL_H = 1080;
@@ -52,8 +57,13 @@ public final class ThorPresentation {
     private static volatile FrameLayout root;
     private static volatile FrameLayout layer;
     private static volatile ImageView background;
+    private static volatile TextView probe;
     private static volatile boolean menuMode = true;
     private static volatile boolean listenerRegistered = false;
+
+    private static volatile String status = "not initialised";
+    private static volatile String lastBgKey = "";
+    private static volatile int updateCount = 0;
 
     private static final Map<String, View> objectViews = new HashMap<String, View>();
     private static final Map<String, String> lastPng = new HashMap<String, String>();
@@ -67,7 +77,13 @@ public final class ThorPresentation {
     /** Called from Haxe with signature ()V. */
     public static void init() {
         final Activity a = activity();
-        if (a == null) return;
+        Log.i(TAG, "init() activity=" + (a != null));
+        if (a == null) {
+            status = "init: Extension.mainActivity is NULL";
+            refreshProbe();
+            return;
+        }
+        status = "init: posted to UI thread";
         a.runOnUiThread(new Runnable() {
             @Override public void run() {
                 createOnUiThread(a);
@@ -89,48 +105,102 @@ public final class ThorPresentation {
                 if (presentation != null) {
                     try { presentation.dismiss(); } catch (Throwable ignored) {}
                 }
-                presentation = null;
-                root = null;
-                layer = null;
-                background = null;
-                objectViews.clear();
-                lastPng.clear();
+                resetState("dismissed");
             }
         });
     }
 
     /**
      * The single Haxe -> Java channel. Signature: (Ljava/lang/String;)V
-     * JSON shape:
-     *   { "menu":true/false,
-     *     "bg":"<base64 png, only sent once>",
-     *     "remove":["tag", ...],
-     *     "objects":[ { "tag","type":"sprite"|"text", "png", "text", "x","y","w","h",
-     *                   "sx","sy","angle","alpha","visible","color","flipX","size","align" } ] }
+     * Every drop is now reported on the probe overlay instead of returning silently.
      */
     public static void update(final String json) {
         final Activity a = activity();
-        if (a == null || json == null) return;
+        updateCount++;
+        if (a == null || json == null) {
+            status = "update #" + updateCount + ": activity=" + (a != null)
+                   + " json=" + (json != null) + " -> DROPPED";
+            refreshProbe();
+            Log.w(TAG, status);
+            return;
+        }
+        final String head = json.length() > 120 ? json.substring(0, 120) : json;
         a.runOnUiThread(new Runnable() {
             @Override public void run() {
-                if (root == null) return;
+                if (root == null) {
+                    status = "update #" + updateCount + ": root NULL -> DROPPED"
+                           + " (Presentation.onCreate not finished, or dismissed)";
+                    refreshProbe();
+                    Log.w(TAG, status);
+                    return;
+                }
                 try {
-                    applyJson(new JSONObject(json));
+                    JSONObject o = new JSONObject(json);
+                    JSONArray arr = o.optJSONArray("objects");
+                    int objs = arr == null ? 0 : arr.length();
+                    boolean hasBg = o.optString("bg", "").length() > 0;
+                    status = "update #" + updateCount + " OK"
+                           + " | menu=" + o.optBoolean("menu", true)
+                           + " | objs=" + objs
+                           + " | bgInJson=" + hasBg
+                           + " | len=" + json.length();
+                    applyJson(o);
+                    refreshProbe();
+                    if (updateCount % 20 == 1) Log.i(TAG, status + " | " + head);
                 } catch (Throwable t) {
-                    Log.e(TAG, "update failed: " + t.getMessage(), t);
+                    status = "update EXCEPTION: " + t;
+                    refreshProbe();
+                    Log.e(TAG, status, t);
                 }
             }
         });
+    }
+
+    /** Draws the state ON the lower screen. No logcat needed. */
+    private static void refreshProbe() {
+        if (!DIAGNOSTICS) return;
+        final TextView tv = probe;
+        if (tv == null) return;
+        final FrameLayout r = root;
+        final String s = "THOR DIAGNOSTICS\n" + status
+                + "\nupdates=" + updateCount + "  showing=" + isActive()
+                + "\nroot=" + (r == null ? "NULL" : r.getWidth() + "x" + r.getHeight())
+                + "  layer=" + (layer != null)
+                + "\nbgApplied=" + (lastBgKey.length() > 0)
+                + "  objectViews=" + objectViews.size();
+        tv.post(new Runnable() {
+            @Override public void run() { tv.setText(s); }
+        });
+    }
+
+    private static void resetState(String reason) {
+        presentation = null;
+        root = null;
+        layer = null;
+        background = null;
+        probe = null;
+        lastBgKey = "";
+        lastPng.clear();
+        objectViews.clear();
+        status = reason;
     }
 
     private static void createOnUiThread(Activity a) {
         if (isActive()) return;
         Display display = findDisplay(a);
         if (display == null) {
-            Log.w(TAG, "No usable secondary display found; dual screen disabled.");
+            status = "NO usable secondary display";
+            refreshProbe();
+            Log.w(TAG, status);
             return;
         }
+        Log.i(TAG, "selected display id=" + display.getDisplayId()
+                + " " + display.getWidth() + "x" + display.getHeight()
+                + " flags=" + display.getFlags() + " " + display);
+        status = "display #" + display.getDisplayId()
+               + " " + display.getWidth() + "x" + display.getHeight();
 
+        lastBgKey = "";
         presentation = new Presentation(a, display, android.R.style.Theme_Black_NoTitleBar_Fullscreen) {
             @Override protected void onCreate(Bundle savedInstanceState) {
                 super.onCreate(savedInstanceState);
@@ -150,6 +220,19 @@ public final class ThorPresentation {
                         FrameLayout.LayoutParams.MATCH_PARENT,
                         FrameLayout.LayoutParams.MATCH_PARENT));
 
+                if (DIAGNOSTICS) {
+                    probe = new TextView(getContext());
+                    probe.setTextColor(Color.GREEN);
+                    probe.setTextSize(TypedValue.COMPLEX_UNIT_PX, 20f);
+                    probe.setPadding(20, 20, 20, 20);
+                    probe.setBackgroundColor(Color.argb(180, 0, 0, 0));
+                    // Added last => drawn on top of the background and object layer.
+                    root.addView(probe, new FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            Gravity.TOP));
+                }
+
                 setContentView(root);
 
                 Window w = getWindow();
@@ -160,35 +243,49 @@ public final class ThorPresentation {
                     w.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
                     w.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
                 }
+                status += " | onCreate OK, waiting for update()";
+                Log.i(TAG, "Presentation.onCreate: root/probe created");
+                refreshProbe();
             }
         };
 
         presentation.setOnDismissListener(new DialogInterface.OnDismissListener() {
             @Override public void onDismiss(DialogInterface dialog) {
-                objectViews.clear();
-                lastPng.clear();
-                root = null;
-                layer = null;
-                background = null;
+                Log.i(TAG, "Presentation dismissed");
+                resetState("dismissed by system");
             }
         });
 
         try {
             presentation.show();
         } catch (Throwable t) {
-            Log.e(TAG, "Presentation.show() failed: " + t.getMessage(), t);
+            status = "Presentation.show() FAILED: " + t;
+            refreshProbe();
+            Log.e(TAG, status, t);
             presentation = null;
             return;
         }
 
         registerDisplayListener(a);
+        status += " | show() OK isShowing=" + isActive();
         Log.i(TAG, "Secondary display ready: " + display.getDisplayId());
+        refreshProbe();
     }
 
     /** Prefer DISPLAY_CATEGORY_PRESENTATION, fall back to the smallest non-default display. */
     private static Display findDisplay(Activity a) {
         DisplayManager dm = (DisplayManager) a.getSystemService(Context.DISPLAY_SERVICE);
         if (dm == null) return null;
+
+        Display[] all = dm.getDisplays();
+        Log.i(TAG, "DisplayManager reports " + (all == null ? 0 : all.length) + " display(s)");
+        if (all != null) {
+            for (Display d : all) {
+                Log.i(TAG, "  display id=" + d.getDisplayId()
+                        + " " + d.getWidth() + "x" + d.getHeight()
+                        + " flags=" + d.getFlags() + " " + d);
+            }
+        }
 
         Display best = null;
         Display[] presentationDisplays = dm.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION);
@@ -198,8 +295,8 @@ public final class ThorPresentation {
                 if (best == null || area(d) < area(best)) best = d;
             }
         }
-        if (best == null) {
-            for (Display d : dm.getDisplays()) {
+        if (best == null && all != null) {
+            for (Display d : all) {
                 if (d.getDisplayId() == Display.DEFAULT_DISPLAY) continue;
                 // 0x4 == Display.FLAG_PRIVATE (use the literal for older SDK stubs)
                 if ((d.getFlags() & 0x4) != 0) continue;
@@ -238,9 +335,27 @@ public final class ThorPresentation {
 
         String bg = obj.optString("bg", "");
         if (bg != null && bg.length() > 0 && background != null) {
-            byte[] bytes = Base64.decode(bg, Base64.DEFAULT);
-            Bitmap bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-            if (bmp != null) background.setImageBitmap(bmp);
+            // Haxe re-pushes the same PNG every 3s; decode only when it changes.
+            String key = bg.length() + ":" + bg.hashCode();
+            if (!key.equals(lastBgKey)) {
+                try {
+                    byte[] bytes = Base64.decode(bg, Base64.DEFAULT);
+                    Bitmap bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                    if (bmp != null) {
+                        background.setImageBitmap(bmp);
+                        lastBgKey = key;
+                        status += " | bg decoded " + bmp.getWidth() + "x" + bmp.getHeight();
+                        Log.i(TAG, "menuDesat decoded " + bmp.getWidth() + "x" + bmp.getHeight()
+                                + " from " + bytes.length + " bytes");
+                    } else {
+                        status += " | bg decode returned NULL (" + bytes.length + " bytes)";
+                        Log.w(TAG, status);
+                    }
+                } catch (Throwable t) {
+                    status += " | bg decode FAILED: " + t;
+                    Log.w(TAG, status, t);
+                }
+            }
         }
 
         JSONArray removals = obj.optJSONArray("remove");
