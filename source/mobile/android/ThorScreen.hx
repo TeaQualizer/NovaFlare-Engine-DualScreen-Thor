@@ -102,7 +102,7 @@ class ThorScreen {
 	/**
 	 * STAGE 4. Make the lower screen work WITHOUT relying on
 	 * LuaUtils.cameraFromString('bottom') being present in the built binary.
-	 *  FORCE_BY_TAG: bottom*/ds_*/thor_* tags are assigned .cameras=[camBottom]
+	 *  FORCE_BY_TAG: bottom/ds_/thor_ tags are assigned .cameras=[camBottom]
 	 *    directly from Haxe. camBottom.flashSprite is hidden, so they show ONLY
 	 *    on the lower screen.
 	 *  MIRROR_ALL_IF_NONE: if nothing reached camBottom, mirror every modchart
