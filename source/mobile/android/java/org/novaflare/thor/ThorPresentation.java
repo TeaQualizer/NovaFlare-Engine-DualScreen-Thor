@@ -184,9 +184,13 @@ public final class ThorPresentation {
              + "\nsprites=" + st.optInt("sprites", 0)
              + " texts=" + st.optInt("texts", 0)
              + " onBottom=" + st.optInt("onBottom", 0)
+             + "\nonCam=" + st.optInt("onCam", 0)
+             + " byTag=" + st.optInt("byTag", 0)
+             + " catchAll=" + st.optBoolean("catchAll", false)
              + "\npngOk=" + st.optInt("pngOk", 0)
              + " pngErr=" + st.optInt("pngErr", 0)
-             + " err=" + st.optString("err", "");
+             + " err=" + st.optString("err", "")
+             + "\ncams=" + st.optString("cams", "");
     }
 
     /** Draws the state ON the lower screen. No logcat needed. */
