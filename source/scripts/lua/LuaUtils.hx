@@ -585,6 +585,8 @@ class LuaUtils
 				return PlayState.instance.camHUD;
 			case 'camother' | 'other':
 				return PlayState.instance.camOther;
+			case 'cambottom' | 'bottom':
+              	return PlayState.instance.camBottom != null ? PlayState.instance.camBottom : PlayState.instance.camGame;
 		}
 		return PlayState.instance.camGame;
 	}
