@@ -80,6 +80,31 @@ class ThorScreen {
 	static final SELF_TEST:Bool = true;
 	static final SELF_TEST_TAG:String = '__thor_selftest__';
 
+	/**
+	 * STAGE 4. The real-device probe reported sprites=2 texts=3 onBottom=0:
+	 * all five Lua objects existed, but NONE had camBottom in .cameras. The
+	 * Haxe -> JNI -> Java View chain was proven fine by the self test, so the
+	 * only missing link is "who puts the object on camBottom".
+	 *
+	 * These two fallbacks make the lower screen work WITHOUT relying on
+	 * LuaUtils.cameraFromString('bottom') being present in the built binary:
+	 *
+	 *  FORCE_BY_TAG: any modchart object whose tag starts with one of the
+	 *  prefixes below is assigned .cameras = [camBottom] directly from Haxe.
+	 *  camBottom.flashSprite is hidden, so the object then shows ONLY on the
+	 *  lower screen. bottom_example.lua already uses "bottom*" tags.
+	 *
+	 *  MIRROR_ALL_IF_NONE: last-resort diagnostic. If no object reached
+	 *  camBottom by either route, mirror every modchart object anyway (COPY
+	 *  only - .cameras is left alone, so the main screen is unaffected).
+	 *  This guarantees visible output even when the Lua script never called
+	 *  setObjectCamera at all. It switches itself off as soon as either of
+	 *  the proper routes starts working.
+	 */
+	static final BOTTOM_TAG_PREFIXES:Array<String> = ['bottom', 'ds_', 'thor_'];
+	static final FORCE_BY_TAG:Bool = true;
+	static final MIRROR_ALL_IF_NONE:Bool = true;
+
 	static var _initJNI:Null<Dynamic> = null;
 	static var _updateJNI:Null<Dynamic> = null;
 	static var _isActiveJNI:Null<Dynamic> = null;
@@ -185,8 +210,12 @@ class ThorScreen {
 			sprites: 0,
 			texts: 0,
 			onBottom: 0,
+			onCam: 0,
+			byTag: 0,
+			catchAll: false,
 			pngOk: 0,
 			pngErr: 0,
+			cams: '',
 			err: ''
 		};
 		final payload:Dynamic = {menu: !inPlay, objects: [], remove: [], stats: stats};
@@ -224,7 +253,7 @@ class ThorScreen {
 			_updateJNI(json);
 			if (now - _lastLog > LOG_MS) {
 				_lastLog = now;
-				trace('[Thor] tick inPlay=$inPlay state=${stats.state} lua=${stats.lua} camBottom=${stats.camBottom} sprites=${stats.sprites} texts=${stats.texts} onBottom=${stats.onBottom} pngOk=${stats.pngOk} pngErr=${stats.pngErr} objs=${payload.objects.length} jsonLen=${json.length} err=${stats.err}');
+				trace('[Thor] tick inPlay=$inPlay state=${stats.state} lua=${stats.lua} camBottom=${stats.camBottom} sprites=${stats.sprites} texts=${stats.texts} onCam=${stats.onCam} byTag=${stats.byTag} catchAll=${stats.catchAll} onBottom=${stats.onBottom} pngOk=${stats.pngOk} pngErr=${stats.pngErr} objs=${payload.objects.length} jsonLen=${json.length} cams=${stats.cams} err=${stats.err}');
 			}
 		} catch (e:Dynamic) {
 			trace('[Thor] Json.stringify/JNI failed: $e');
@@ -265,24 +294,67 @@ class ThorScreen {
 		var nSprites:Int = 0;
 		var nTexts:Int = 0;
 		var nOnBottom:Int = 0;
+		var nOnCam:Int = 0;
+		var nByTag:Int = 0;
 		var nPngOk:Int = 0;
 		var nPngErr:Int = 0;
+		var catchAll:Bool = false;
+		final dump:Array<String> = [];
 
 		#if LUA_ALLOWED
-		// Count EVERY Lua object before filtering by camera. This is what lets
-		// the probe distinguish "Lua created nothing" from "objects exist but
-		// are on the wrong camera" / "camBottom was null at setObjectCamera time".
+		// Pass 1: count every Lua object and dump the camera each one is on.
+		// The real-device probe showed sprites=2 texts=3 onBottom=0, i.e. the
+		// objects existed but were all on main-screen cameras. `cams` prints
+		// e.g. "bottomTitle=1280x720" (main) vs "=1240x1080*" (bottom).
 		try {
-			for (tag in ps.modchartSprites.keys()) nSprites++;
-			for (tag in ps.modchartTexts.keys()) nTexts++;
+			for (tag => spr in ps.modchartSprites) {
+				nSprites++;
+				if (spr == null) continue;
+				if (dump.length < 6) dump.push('$tag=${cameraLabel(spr, cam)}');
+				if (cam == null) continue;
+				if (tagMatchesBottom(tag)) nByTag++;
+				else if (isOnBottom(spr, cam)) nOnCam++;
+			}
+			for (tag => txt in ps.modchartTexts) {
+				nTexts++;
+				if (txt == null) continue;
+				if (dump.length < 6) dump.push('$tag=${cameraLabel(txt, cam)}');
+				if (cam == null) continue;
+				if (tagMatchesBottom(tag)) nByTag++;
+				else if (isOnBottom(txt, cam)) nOnCam++;
+			}
 		} catch (e:Dynamic) {
 			stats.err = 'map scan: $e';
 		}
+		stats.cams = dump.join(' ');
+		stats.onCam = nOnCam;
+		stats.byTag = nByTag;
+
+		// Last-resort diagnostic: when NOTHING reached camBottom by either
+		// route, mirror every modchart object anyway. Copy only: .cameras is
+		// left alone so the main screen keeps working and gameplay is unaffected.
+		catchAll = MIRROR_ALL_IF_NONE && cam != null && nOnCam == 0 && nByTag == 0
+			&& (nSprites + nTexts) > 0;
+		stats.catchAll = catchAll;
 
 		if (cam != null) {
 			for (tag => spr in ps.modchartSprites) {
 				if (spr == null) continue;
-				if (!isOnBottom(spr, cam)) continue;
+				var onCamNow:Bool = isOnBottom(spr, cam);
+				final byTag:Bool = tagMatchesBottom(tag);
+				if (!onCamNow && !byTag && !catchAll) continue;
+
+				// Deterministic repair, independent of LuaUtils.cameraFromString:
+				// force this object onto camBottom from Haxe. camBottom's
+				// flashSprite is hidden, so it then appears ONLY on the lower screen.
+				if (byTag && !onCamNow && FORCE_BY_TAG) {
+					try {
+						spr.cameras = [cam];
+					} catch (e:Dynamic) {
+						stats.err = 'force cam $tag: $e';
+					}
+				}
+
 				current.set(tag, true);
 				nOnBottom++;
 
@@ -330,7 +402,18 @@ class ThorScreen {
 
 			for (tag => txt in ps.modchartTexts) {
 				if (txt == null) continue;
-				if (!isOnBottom(txt, cam)) continue;
+				var onCamNow:Bool = isOnBottom(txt, cam);
+				final byTag:Bool = tagMatchesBottom(tag);
+				if (!onCamNow && !byTag && !catchAll) continue;
+
+				if (byTag && !onCamNow && FORCE_BY_TAG) {
+					try {
+						txt.cameras = [cam];
+					} catch (e:Dynamic) {
+						stats.err = 'force cam $tag: $e';
+					}
+				}
+
 				current.set(tag, true);
 				nOnBottom++;
 				try {
@@ -395,6 +478,39 @@ class ThorScreen {
 		#else
 		return false;
 		#end
+	}
+
+	/** Case-insensitive tag-prefix test. Uses indexOf so no StringTools import is needed. */
+	static function tagMatchesBottom(tag:String):Bool {
+		if (tag == null) return false;
+		final t:String = tag.toLowerCase();
+		for (p in BOTTOM_TAG_PREFIXES) if (t.indexOf(p) == 0) return true;
+		return false;
+	}
+
+	/**
+	 * Human-readable camera assignment for the probe overlay. Dimensions are
+	 * enough to tell the cameras apart: camBottom is 1240x1080 (marked with *),
+	 * every main-screen camera is 1280x720. A "null"/"ERR" here means the
+	 * .cameras read itself failed, which was another way onBottom could be 0.
+	 */
+	static function cameraLabel(obj:Dynamic, cam:Null<FlxCamera>):String {
+		try {
+			final cams:Array<FlxCamera> = obj.cameras;
+			if (cams == null) return 'null';
+			if (cams.length == 0) return '[]';
+			final parts:Array<String> = [];
+			for (c in cams) {
+				if (c == null) {
+					parts.push('null');
+					continue;
+				}
+				parts.push('${c.width}x${c.height}' + (c == cam ? '*' : ''));
+			}
+			return parts.join('+');
+		} catch (e:Dynamic) {
+			return 'ERR';
+		}
 	}
 
 	static function stateName():String {
