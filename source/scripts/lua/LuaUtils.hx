@@ -577,18 +577,15 @@ class LuaUtils
 		return "unknown";
 	}
 
-	public static function cameraFromString(cam:String):FlxCamera
-	{
-		switch (cam.toLowerCase())
-		{
-			case 'camhud' | 'hud':
-				return PlayState.instance.camHUD;
-			case 'camother' | 'other':
-				return PlayState.instance.camOther;
-			case 'cambottom' | 'bottom':
-              	return PlayState.instance.camBottom != null ? PlayState.instance.camBottom : PlayState.instance.camGame;
-		}
-		return PlayState.instance.camGame;
-	}
+	public static function cameraFromString(cam:String):FlxCamera {
+      final ps = PlayState.instance;
+      if (ps == null) return FlxG.camera;
+      switch (cam.toLowerCase()) {
+          case 'camhud' | 'hud': return ps.camHUD;
+          case 'camother' | 'other': return ps.camOther;
+          case 'cambottom' | 'bottom': return ps.camBottom != null ? ps.camBottom : ps.camGame;
+      }
+      return ps.camGame;
+  }
 }
 
