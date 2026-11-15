@@ -154,7 +154,7 @@ class Main extends Sprite
 		setupGame();
 
 		#if android
-			mobile.android.ThorScreen.start();
+		mobile.android.ThorScreen.start();
 		#end
 			
 		#if (cpp && windows)
