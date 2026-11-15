@@ -70,7 +70,7 @@ class Main extends Sprite
 	private static var gameConfig = {
 		width: 1280, // WINDOW width
 		height: 720, // WINDOW height
-		ialState: InitState,
+		initialState: InitState,
 		zoom: -1.0, // game state bounds
 		framerate: #if desktop 240 #else 60 #end, // responsive bootstrap; ClientPrefs takes over in InitState
 		skipSplash: true, // if the default flixel splash screen should be skipped
