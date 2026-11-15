@@ -583,7 +583,7 @@ class LuaUtils
       switch (cam.toLowerCase()) {
           case 'camhud' | 'hud': return ps.camHUD;
           case 'camother' | 'other': return ps.camOther;
-          case 'cambottom' | 'bottom': return ps.camBottom != null ? ps.camBottom : ps.camGame;
+          case 'cambottom' | 'bottom': return ps.camBottom;
       }
       return ps.camGame;
   }
