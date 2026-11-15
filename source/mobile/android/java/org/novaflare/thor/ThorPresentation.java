@@ -1,4 +1,4 @@
-/*
+/* 添加了更多的参考 希望cambottom能找到问题
  * DIAGNOSTIC BUILD. A green status overlay is drawn on the lower screen so you
  * can locate a black screen WITHOUT adb/logcat. Set DIAGNOSTICS = false once the
  * lower screen is confirmed working.
@@ -10,6 +10,12 @@
  * OpenFL Stage. A FlxCamera cannot be attached to it. ThorScreen.hx mirrors the live state
  * of Lua objects into native Android Views instead. The Haxe -> Java channel is ONE JNI
  * method taking a JSON string, so no byte[] / primitive-array marshalling is needed.
+ *
+ * STAGE 3 (Lua objects not appearing): `menu` is now REPORT-ONLY. Previously applyJson()
+ * hid the whole object layer and transform() forced every object View to GONE whenever
+ * menuMode was true, so a single wrong inPlay guess blanked out every Lua object with
+ * no exception anywhere. The object layer is now always VISIBLE; Haxe emits an explicit
+ * "remove" list when leaving PlayState. payload.stats is printed on the probe overlay.
  */
 
 package org.novaflare.thor;
@@ -58,12 +64,16 @@ public final class ThorPresentation {
     private static volatile FrameLayout layer;
     private static volatile ImageView background;
     private static volatile TextView probe;
+    /** Report-only. MUST NOT be used to hide the object layer any more. */
     private static volatile boolean menuMode = true;
     private static volatile boolean listenerRegistered = false;
 
     private static volatile String status = "not initialised";
     private static volatile String lastBgKey = "";
     private static volatile int updateCount = 0;
+    private static volatile int lastObjCount = 0;
+    private static volatile int lastRemoveCount = 0;
+    private static volatile String lastStats = "(no stats yet - old Haxe build?)";
 
     private static final Map<String, View> objectViews = new HashMap<String, View>();
     private static final Map<String, String> lastPng = new HashMap<String, String>();
@@ -137,16 +147,23 @@ public final class ThorPresentation {
                 try {
                     JSONObject o = new JSONObject(json);
                     JSONArray arr = o.optJSONArray("objects");
+                    JSONArray rem = o.optJSONArray("remove");
                     int objs = arr == null ? 0 : arr.length();
+                    int removes = rem == null ? 0 : rem.length();
+                    lastObjCount = objs;
+                    lastRemoveCount = removes;
+                    lastStats = formatStats(o.optJSONObject("stats"));
                     boolean hasBg = o.optString("bg", "").length() > 0;
                     status = "update #" + updateCount + " OK"
                            + " | menu=" + o.optBoolean("menu", true)
-                           + " | objs=" + objs
+                           + " | objs=" + objs + " rm=" + removes
                            + " | bgInJson=" + hasBg
                            + " | len=" + json.length();
                     applyJson(o);
                     refreshProbe();
-                    if (updateCount % 20 == 1) Log.i(TAG, status + " | " + head);
+                    if (updateCount % 20 == 1) {
+                        Log.i(TAG, status + " | " + lastStats.replace('\n', ' ') + " | " + head);
+                    }
                 } catch (Throwable t) {
                     status = "update EXCEPTION: " + t;
                     refreshProbe();
@@ -156,18 +173,39 @@ public final class ThorPresentation {
         });
     }
 
+    private static String formatStats(JSONObject st) {
+        if (st == null) return "(payload has no stats - old Haxe build?)";
+        return "inPlay=" + st.optBoolean("inPlay", false)
+             + " lua=" + st.optBoolean("lua", false)
+             + " ps=" + st.optBoolean("ps", false)
+             + "\nstate=" + st.optString("state", "?")
+             + "\ncamBottom=" + st.optBoolean("camBottom", false)
+             + " camInList=" + st.optBoolean("camInList", false)
+             + "\nsprites=" + st.optInt("sprites", 0)
+             + " texts=" + st.optInt("texts", 0)
+             + " onBottom=" + st.optInt("onBottom", 0)
+             + "\npngOk=" + st.optInt("pngOk", 0)
+             + " pngErr=" + st.optInt("pngErr", 0)
+             + " err=" + st.optString("err", "");
+    }
+
     /** Draws the state ON the lower screen. No logcat needed. */
     private static void refreshProbe() {
         if (!DIAGNOSTICS) return;
         final TextView tv = probe;
         if (tv == null) return;
         final FrameLayout r = root;
+        final FrameLayout l = layer;
         final String s = "THOR DIAGNOSTICS\n" + status
                 + "\nupdates=" + updateCount + "  showing=" + isActive()
                 + "\nroot=" + (r == null ? "NULL" : r.getWidth() + "x" + r.getHeight())
-                + "  layer=" + (layer != null)
+                + "  menu=" + menuMode
+                + "\nlayer=" + (l == null ? "NULL" : "vis=" + l.getVisibility()
+                        + " children=" + l.getChildCount())
+                + "  objectViews=" + objectViews.size()
                 + "\nbgApplied=" + (lastBgKey.length() > 0)
-                + "  objectViews=" + objectViews.size();
+                + "  objs=" + lastObjCount + " rm=" + lastRemoveCount
+                + "\n--- HAXE STATS ---\n" + lastStats;
         tv.post(new Runnable() {
             @Override public void run() { tv.setText(s); }
         });
@@ -182,6 +220,9 @@ public final class ThorPresentation {
         lastBgKey = "";
         lastPng.clear();
         objectViews.clear();
+        lastObjCount = 0;
+        lastRemoveCount = 0;
+        lastStats = "(reset: " + reason + ")";
         status = reason;
     }
 
@@ -215,7 +256,10 @@ public final class ThorPresentation {
                         FrameLayout.LayoutParams.MATCH_PARENT));
 
                 layer = new FrameLayout(getContext());
-                layer.setVisibility(menuMode ? View.GONE : View.VISIBLE);
+                // STAGE 3: always visible. Haxe sends an explicit "remove" list
+                // when leaving PlayState; hiding by `menu` silently blanked all
+                // Lua objects and was the main cause of "nothing shows up".
+                layer.setVisibility(View.VISIBLE);
                 root.addView(layer, new FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.MATCH_PARENT,
                         FrameLayout.LayoutParams.MATCH_PARENT));
@@ -327,11 +371,11 @@ public final class ThorPresentation {
     }
 
     private static void applyJson(JSONObject obj) throws Exception {
-        boolean menu = obj.optBoolean("menu", true);
-        if (menu != menuMode) {
-            menuMode = menu;
-            if (layer != null) layer.setVisibility(menu ? View.GONE : View.VISIBLE);
-        }
+        // `menu` is now report-only. Never derive the object layer visibility
+        // from it: a single wrong inPlay guess on the Haxe side would otherwise
+        // hide every Lua object with no error in logcat at all.
+        menuMode = obj.optBoolean("menu", true);
+        if (layer != null) layer.setVisibility(View.VISIBLE);
 
         String bg = obj.optString("bg", "");
         if (bg != null && bg.length() > 0 && background != null) {
@@ -392,6 +436,7 @@ public final class ThorPresentation {
                         FrameLayout.LayoutParams.WRAP_CONTENT));
                 objectViews.put(tag, tv);
                 lastPng.remove(tag);
+                Log.i(TAG, "created TextView for " + tag);
             }
 
             tv.setText(o.optString("text", ""));
@@ -415,11 +460,15 @@ public final class ThorPresentation {
             if (v != null) layer.removeView(v);
             iv = new ImageView(root.getContext());
             iv.setScaleType(ImageView.ScaleType.FIT_XY);
+            // Diagnostic placeholder: a magenta box means "Haxe sent this
+            // object but no PNG ever decoded" (encodeBitmap failed on Android).
+            if (DIAGNOSTICS) iv.setBackgroundColor(Color.MAGENTA);
             layer.addView(iv, new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT));
             objectViews.put(tag, iv);
             lastPng.remove(tag);
+            Log.i(TAG, "created ImageView for " + tag + " (type=" + type + ")");
         }
 
         String png = o.optString("png", "");
@@ -430,8 +479,13 @@ public final class ThorPresentation {
                 if (bmp != null) {
                     iv.setImageBitmap(bmp);
                     lastPng.put(tag, png);
+                    if (DIAGNOSTICS) iv.setBackgroundColor(Color.TRANSPARENT);
                     iv.setPivotX(bmp.getWidth() * 0.5f);
                     iv.setPivotY(bmp.getHeight() * 0.5f);
+                    Log.i(TAG, "decoded sprite png for " + tag + " "
+                            + bmp.getWidth() + "x" + bmp.getHeight());
+                } else {
+                    Log.w(TAG, "sprite png decode NULL for " + tag + " (" + bytes.length + " bytes)");
                 }
             } catch (Throwable t) {
                 Log.w(TAG, "bad sprite png for " + tag + ": " + t.getMessage());
@@ -456,7 +510,9 @@ public final class ThorPresentation {
         v.setScaleY((float) o.optDouble("sy", 1) * sy);
         v.setRotation((float) o.optDouble("angle", 0));
         v.setAlpha((float) o.optDouble("alpha", 1));
-        boolean visible = o.optBoolean("visible", true) && !menuMode;
+        // STAGE 3: only the object's own `visible` flag matters. The old
+        // "&& !menuMode" hid every object View whenever the payload said menu.
+        boolean visible = o.optBoolean("visible", true);
         v.setVisibility(visible ? View.VISIBLE : View.GONE);
     }
 
