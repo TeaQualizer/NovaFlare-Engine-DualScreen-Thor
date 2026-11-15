@@ -1,3 +1,30 @@
+/*
+ * 拼尽全力无法战胜副屏JNI，几乎没有在haxe里面搞这个的，溜溜梅透明胶带捆钢管来的
+ *
+ * Haxe side of the Thor dual-screen bridge. DIAGNOSTIC BUILD.
+ *
+ * Design note:
+ *   An Android Presentation is a Dialog with its OWN View hierarchy, not an
+ *   OpenFL Stage, so a FlxCamera cannot be attached to it. On Android this engine
+ *   runs FlxG.renderTile (hardware), where FlxCamera has no BitmapData buffer.
+ *   Instead camBottom stays a REAL FlxCamera (so every Psych Lua function works),
+ *   its flashSprite is hidden, and every 50ms we mirror the LIVE state of the
+ *   objects assigned to camBottom into native Android Views via one JNI call.
+ *
+ * 黑屏修复这块，单次推送图片貌似行不通，试试看bitmapdata
+ *   1. The background is sent from the RAW packaged PNG bytes (Assets.getBytes),
+ *      not from BitmapData.encode(), which is unreliable in hardware render mode.
+ *   2. The background is re-pushed every 3s. Previously a one-shot send could be
+ *      dropped while Presentation.onCreate() was still running on the UI thread,
+ *      leaving a permanently black lower screen with no error anywhere.
+ *   3. isActive() no longer hard-aborts tick(); init() is retried periodically.
+ *   4. ENTER_FRAME is bound to Lib.current.stage when available.
+ *   5. trace() heartbeat every 5s so the in-game debug console shows the chain.
+ *
+ * Java side has a matching DIAGNOSTICS overlay: set DIAGNOSTICS=false in
+ * ThorPresentation.java once the lower screen is confirmed working.
+ */
+
 package mobile.android;
 
 #if android
@@ -16,6 +43,7 @@ import openfl.display.BitmapData;
 import openfl.display.PNGEncoderOptions;
 import openfl.events.Event;
 import openfl.Lib;
+import openfl.utils.Assets;
 import openfl.utils.ByteArray;
 
 class ThorScreen {
@@ -25,6 +53,10 @@ class ThorScreen {
 
 	/** Mirror tick. 20 Hz is plenty for a 60 Hz lower panel and keeps JNI/PNG cost low. */
 	static final TICK_MS:Int = 50;
+	/** Re-send the background periodically; Java de-duplicates by content key. */
+	static final BG_REPUSH_MS:Int = 3000;
+	static final INIT_RETRY_MS:Int = 2000;
+	static final LOG_MS:Int = 5000;
 
 	static var _initJNI:Null<Dynamic> = null;
 	static var _updateJNI:Null<Dynamic> = null;
@@ -33,8 +65,11 @@ class ThorScreen {
 
 	static var _started:Bool = false;
 	static var _lastTick:Int = 0;
-	static var _bgSent:Bool = false;
+	static var _lastBgPush:Int = 0;
+	static var _lastInitRetry:Int = 0;
+	static var _lastLog:Int = 0;
 	static var _menuPng:Null<String> = null;
+	static var _frameTarget:Null<Dynamic> = null;
 
 	/** tag -> last frame key, so animated sprites only re-encode when the frame changes. */
 	static var _frameCache:StringMap<String> = new StringMap<String>();
@@ -51,6 +86,10 @@ class ThorScreen {
 		_isActiveJNI = JNI.createStaticMethod(cls, 'isActive', '()Z', false, true);
 		_dismissJNI = JNI.createStaticMethod(cls, 'dismiss', '()V', false, true);
 
+		final okInit:Bool = _initJNI != null;
+		final okUpdate:Bool = _updateJNI != null;
+		final okActive:Bool = _isActiveJNI != null;
+		trace('[Thor] start: initJNI=$okInit updateJNI=$okUpdate isActiveJNI=$okActive');
 		if (_initJNI == null || _updateJNI == null) {
 			trace('[Thor] ThorPresentation Java class not found; dual screen disabled.');
 			_started = false;
@@ -58,17 +97,30 @@ class ThorScreen {
 		}
 
 		_initJNI();
-		_menuPng = encodeMenuDesat();
+		_menuPng = loadMenuDesatPng();
+		final pngLen:Int = _menuPng != null ? _menuPng.length : 0;
+		trace('[Thor] menuDesat base64 length=$pngLen');
+		if (_menuPng == null)
+			trace('[Thor] WARNING: no background PNG available; lower screen will show the Java diagnostic overlay only.');
+
 		_lastTick = Lib.getTimer();
-		Lib.current.addEventListener(Event.ENTER_FRAME, onEnterFrame);
+		_lastBgPush = 0;
+		_lastInitRetry = _lastTick;
+		_lastLog = 0;
+
+		final st = Lib.current.stage;
+		_frameTarget = st != null ? st : Lib.current;
+		_frameTarget.addEventListener(Event.ENTER_FRAME, onEnterFrame);
+		trace('[Thor] ENTER_FRAME bound to ' + (st != null ? 'stage' : 'Lib.current'));
 	}
 
 	public static function stop():Void {
 		if (!_started) return;
-		Lib.current.removeEventListener(Event.ENTER_FRAME, onEnterFrame);
+		if (_frameTarget != null) _frameTarget.removeEventListener(Event.ENTER_FRAME, onEnterFrame);
+		_frameTarget = null;
 		if (_dismissJNI != null) _dismissJNI();
 		_started = false;
-		_bgSent = false;
+		_lastBgPush = 0;
 		_frameCache = new StringMap<String>();
 		_seen = new StringMap<Bool>();
 	}
@@ -83,31 +135,46 @@ class ThorScreen {
 	/** Can also be called manually from MusicBeatState.update() if you prefer. */
 	public static function tick():Void {
 		if (_updateJNI == null) return;
-		if (_isActiveJNI != null && !_isActiveJNI()) return;
+		final now:Int = Lib.getTimer();
+
+		// Do NOT hard-return when isActive() is false. That silently killed every
+		// tick in the previous build. Retry init() and keep pushing; Java drops
+		// harmlessly when root == null and shows the reason on its probe overlay.
+		if (_isActiveJNI != null && !_isActiveJNI()) {
+			if (now - _lastInitRetry > INIT_RETRY_MS) {
+				_lastInitRetry = now;
+				if (_initJNI != null) _initJNI();
+				trace('[Thor] presentation inactive, retrying init()');
+			}
+		}
 
 		final inPlay:Bool = PlayState.instance != null && Std.isOfType(FlxG.state, PlayState);
 		final payload:Dynamic = {menu: !inPlay, objects: [], remove: []};
 
+		// Re-push the background periodically. A one-shot send can be lost while
+		// Presentation.onCreate() is still running on the UI thread.
+		if (_menuPng != null && now - _lastBgPush > BG_REPUSH_MS) {
+			payload.bg = _menuPng;
+			_lastBgPush = now;
+		}
+
 		if (!inPlay) {
 			// Every state except PlayState: static MenuDesat background, no object layer.
-			if (!_bgSent && _menuPng != null) {
-				payload.bg = _menuPng;
-				_bgSent = true;
-			}
 			for (tag in _seen.keys()) payload.remove.push(tag);
 			_seen = new StringMap<Bool>();
 			_frameCache = new StringMap<String>();
 		} else {
-			// MenuDesat stays behind the camBottom layer. Set hideBg = true in Java
-			// if you want a black gameplay background instead.
-			if (!_bgSent && _menuPng != null) {
-				payload.bg = _menuPng;
-				_bgSent = true;
-			}
 			syncObjects(payload);
 		}
 
-		_updateJNI(Json.stringify(payload));
+		final json:String = Json.stringify(payload);
+		_updateJNI(json);
+
+		if (now - _lastLog > LOG_MS) {
+			_lastLog = now;
+			final hasBg:Bool = payload.bg != null;
+			trace('[Thor] tick inPlay=$inPlay jsonLen=${json.length} bg=$hasBg objects=${payload.objects.length}');
+		}
 	}
 
 	static function syncObjects(payload:Dynamic):Void {
@@ -212,16 +279,44 @@ class ThorScreen {
 		return Std.string(a).toLowerCase();
 	}
 
-	static function encodeMenuDesat():Null<String> {
+	/**
+	 * Prefer the RAW packaged PNG bytes. BitmapData.encode() re-encodes through a
+	 * CPU-side image buffer that may not exist in hardware/tile render mode, which
+	 * was one of the silent black-screen causes. No image processing needed here:
+	 * Java's BitmapFactory can decode the original bytes directly.
+	 */
+	static function loadMenuDesatPng():Null<String> {
+		final candidates:Array<String> = [
+			'shared/images/menuDesat.png',
+			'assets/shared/images/menuDesat.png',
+			'images/menuDesat.png'
+		];
+		for (p in candidates) {
+			try {
+				final ba = Assets.getBytes(p);
+				if (ba != null && ba.length > 0) {
+					final bytes:haxe.io.Bytes = ba;
+					trace('[Thor] menuDesat raw bytes from $p (${ba.length} bytes)');
+					return Base64.encode(bytes);
+				}
+			} catch (e:Dynamic) {
+				trace('[Thor] Assets.getBytes($p) failed: $e');
+			}
+		}
+
+		// Fallback: Polymod-aware Paths.image(), then re-encode the BitmapData.
 		try {
 			final spr:FlxSprite = new FlxSprite();
 			spr.loadGraphic(Paths.image('menuDesat'));
 			final bmp:BitmapData = spr.pixels;
-			return bmp != null ? encodeBitmap(bmp) : null;
+			if (bmp != null) {
+				trace('[Thor] menuDesat via Paths.image() fallback');
+				return encodeBitmap(bmp);
+			}
 		} catch (e:Dynamic) {
-			trace('[Thor] menuDesat load failed: $e');
-			return null;
+			trace('[Thor] Paths.image() fallback failed: $e');
 		}
+		return null;
 	}
 
 	static function encodeBitmap(bmp:BitmapData):String {
