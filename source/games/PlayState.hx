@@ -286,6 +286,7 @@ class PlayState extends MusicBeatState
 	public var camOther:FlxCamera;
 	public var luaVpadCam:FlxCamera;
 	public var camPause:FlxCamera;
+	public var camBottom:FlxCamera;
 	public var cameraSpeed:Float = 1;
 
 	public var songScore:Int = 0;
@@ -439,6 +440,14 @@ class PlayState extends MusicBeatState
 		FlxG.cameras.add(camOther, false);
 		FlxG.cameras.add(luaVpadCam, false);
 		FlxG.cameras.add(camPause, false);
+		#if android
+		camBottom = new FlxCamera(0, 0, mobile.android.ThorScreen.BOTTOM_W, mobile.android.ThorScreen.BOTTOM_H);
+		camBottom.bgColor.alpha = 0;
+		FlxG.cameras.add(camBottom, false);
+		// 隐藏显示容器 保留 camera.visible = true 这样FlxSprite.draw()仍会执行并刷新framePixels 而对象只出现在副屏
+
+		camBottom.flashSprite.visible = false;
+		#end
 		grpNoteSplashes = new FlxTypedGroup<NoteSplash>();
 
 		persistentUpdate = persistentDraw = true;
