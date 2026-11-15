@@ -1,36 +1,3 @@
-/*
- * Drop into: source/mobile/android/ThorScreen.hx   (package mobile.android)
- *
- * Haxe side of the Thor dual-screen bridge.
- *
- * Design note (important):
- *   An Android Presentation is a Dialog with its OWN View hierarchy. It is not an
- *   OpenFL Stage, so a FlxCamera cannot be "attached" to it. On Android this engine
- *   runs FlxG.renderTile (hardware), where FlxCamera has no BitmapData buffer, so
- *   framebuffer readback is unreliable. Instead:
- *
- *     - camBottom is a REAL FlxCamera in PlayState (so every Psych Lua function works).
- *     - Its flashSprite is hidden, so assigned objects never appear on the main screen,
- *       but Flixel still calls draw() on them (which keeps framePixels up to date).
- *     - Every 50ms we walk modchartSprites / modchartTexts, pick the objects whose
- *       .cameras contains camBottom, and mirror their LIVE state into native Android
- *       Views through a single JNI call carrying a JSON string.
- *
- *   That means setObjectCamera(tag, 'bottom') is the ONLY Lua-side change needed.
- *   doTweenX / setProperty / scale / alpha / angle / playAnim / setTextString etc.
- *   all keep working because we read the object state, not a screenshot.
- *
- *   Known limitation: shaders, filters, blend modes, scrollFactor and camera zoom
- *   are NOT mirrored. If you need pixel-exact Flixel rendering on the lower screen,
- *   you need a second EGL surface (Presentation + ANativeWindow + shared context),
- *   which is a much larger native project.
- *
- * Patch points (see patch_points.txt):
- *   1. source/Main.hx            -> init(): ThorScreen.start()
- *   2. source/games/PlayState.hx -> declare + create camBottom
- *   3. source/scripts/lua/LuaUtils.hx -> cameraFromString(): add 'bottom' alias
- */
-
 package mobile.android;
 
 #if android
@@ -208,7 +175,11 @@ class ThorScreen {
 		_seen = current;
 	}
 
-	static inline function isOnBottom(obj:Dynamic, cam:FlxCamera):Bool {
+	// NOTE: deliberately NOT `inline`. Haxe rejects "Cannot inline a not final
+	// return" for inline functions containing early returns (the `cams == null`
+	// guard and the `return true` inside the loop). These helpers run at 20 Hz,
+	// so losing the inline hint has no measurable cost.
+	static function isOnBottom(obj:Dynamic, cam:FlxCamera):Bool {
 		final cams:Array<FlxCamera> = obj.cameras;
 		if (cams == null) return false;
 		for (c in cams) if (c == cam) return true;
@@ -231,13 +202,13 @@ class ThorScreen {
 		return spr.pixels; // full atlas as last resort
 	}
 
-	static inline function getFrameKey(spr:FlxSprite):String {
+	static function getFrameKey(spr:FlxSprite):String {
 		final anim = spr.animation != null ? spr.animation.curAnim : null;
 		final idx:Int = anim != null ? anim.curFrame : 0;
 		return '${idx}_${spr.flipX}_${spr.flipY}_${(spr.color : Int)}';
 	}
 
-	static inline function alignString(a:FlxTextAlign):String {
+	static function alignString(a:FlxTextAlign):String {
 		return Std.string(a).toLowerCase();
 	}
 
@@ -253,7 +224,7 @@ class ThorScreen {
 		}
 	}
 
-	static inline function encodeBitmap(bmp:BitmapData):String {
+	static function encodeBitmap(bmp:BitmapData):String {
 		final ba:ByteArray = bmp.encode(bmp.rect, new PNGEncoderOptions(true));
 		// openfl.utils.ByteArray is an abstract over ByteArrayData, which extends
 		// haxe.io.Bytes on cpp; the @:to conversion makes this assignment valid.
