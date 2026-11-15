@@ -16,6 +16,16 @@
  * menuMode was true, so a single wrong inPlay guess blanked out every Lua object with
  * no exception anywhere. The object layer is now always VISIBLE; Haxe emits an explicit
  * "remove" list when leaving PlayState. payload.stats is printed on the probe overlay.
+ *
+ * STAGE 5 (sprites still blank, probe said pngOk=0 pngErr=0 len=1202):
+ *   BitmapData.encode() produced no bytes on this Android hardware/tile target -
+ *   the SAME failure that caused the stage-1 black background. Sprites now use
+ *   the raw packaged atlas PNG (Assets.getBytes) exactly like MenuDesat does:
+ *   Haxe sends the full atlas ONCE per tag + a tiny frame rect every tick, and
+ *   Java decodes once into atlasBmps then Bitmap.createBitmap() crops per frame.
+ *   Also: every object View now gets EXPLICIT width/height. A WRAP_CONTENT
+ *   ImageView with no bitmap is 0x0, so even the magenta diagnostic placeholder
+ *   was invisible before. The legacy `png` field is kept as a fallback.
  */
 
 package org.novaflare.thor;
@@ -77,6 +87,10 @@ public final class ThorPresentation {
 
     private static final Map<String, View> objectViews = new HashMap<String, View>();
     private static final Map<String, String> lastPng = new HashMap<String, String>();
+    /** Stage 5: decoded full atlas per tag, cropped to the current frame rect. */
+    private static final Map<String, Bitmap> atlasBmps = new HashMap<String, Bitmap>();
+    private static final Map<String, String> lastAtlasKey = new HashMap<String, String>();
+    private static final Map<String, String> lastRect = new HashMap<String, String>();
 
     private ThorPresentation() {}
 
@@ -187,9 +201,14 @@ public final class ThorPresentation {
              + "\nonCam=" + st.optInt("onCam", 0)
              + " byTag=" + st.optInt("byTag", 0)
              + " catchAll=" + st.optBoolean("catchAll", false)
+             + "\ncamFixed=" + st.optInt("camFixed", 0)
+             + " rawOk=" + st.optInt("rawOk", 0)
+             + " rawMiss=" + st.optInt("rawMiss", 0)
+             + " rectOk=" + st.optInt("rectOk", 0)
              + "\npngOk=" + st.optInt("pngOk", 0)
              + " pngErr=" + st.optInt("pngErr", 0)
              + " err=" + st.optString("err", "")
+             + "\nsrc=" + st.optString("src", "")
              + "\ncams=" + st.optString("cams", "");
     }
 
@@ -223,6 +242,9 @@ public final class ThorPresentation {
         probe = null;
         lastBgKey = "";
         lastPng.clear();
+        lastAtlasKey.clear();
+        lastRect.clear();
+        atlasBmps.clear();
         objectViews.clear();
         lastObjCount = 0;
         lastRemoveCount = 0;
@@ -274,6 +296,13 @@ public final class ThorPresentation {
                     probe.setTextSize(TypedValue.COMPLEX_UNIT_PX, 20f);
                     probe.setPadding(20, 20, 20, 20);
                     probe.setBackgroundColor(Color.argb(180, 0, 0, 0));
+                    // Tap the probe once to hide it and inspect the WHOLE lower
+                    // screen: the stats board covers roughly y=0..330, so any
+                    // object placed above that can look "missing" otherwise.
+                    probe.setOnClickListener(new View.OnClickListener() {
+                        @Override public void onClick(View v) { v.setVisibility(View.GONE); }
+                    });
+                    probe.setClickable(true);
                     // Added last => drawn on top of the background and object layer.
                     root.addView(probe, new FrameLayout.LayoutParams(
                             FrameLayout.LayoutParams.MATCH_PARENT,
@@ -453,6 +482,9 @@ public final class ThorPresentation {
             else tv.setGravity(Gravity.LEFT);
             int maxW = (int) ((float) o.optDouble("w", 0) * scaleX());
             if (maxW > 0) tv.setMaxWidth(maxW);
+            // Explicit width: a WRAP_CONTENT TextView with an empty string can
+            // collapse to 0px and look identical to "the object never arrived".
+            applySize(tv, o, false);
             transform(tv, o);
             return;
         }
@@ -472,11 +504,76 @@ public final class ThorPresentation {
                     FrameLayout.LayoutParams.WRAP_CONTENT));
             objectViews.put(tag, iv);
             lastPng.remove(tag);
+            // A freshly created ImageView has no bitmap. Invalidate the rect
+            // cache so the very next tick re-crops from the cached full atlas.
+            lastRect.remove(tag);
             Log.i(TAG, "created ImageView for " + tag + " (type=" + type + ")");
         }
 
+        // ---- STAGE 5: primary image source = raw packaged atlas PNG ----
+        // Haxe sends the whole atlas once (and re-sends it on the 3s background
+        // repush). Decode it once, cache it, then crop the tiny frame rect that
+        // arrives on every tick. This avoids BitmapData.encode() entirely.
+        String atlas = o.optString("atlas", "");
+        if (atlas != null && atlas.length() > 0) {
+            String key = atlas.length() + ":" + atlas.hashCode();
+            if (!key.equals(lastAtlasKey.get(tag))) {
+                try {
+                    byte[] bytes = Base64.decode(atlas, Base64.DEFAULT);
+                    Bitmap full = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                    if (full != null) {
+                        atlasBmps.put(tag, full);
+                        lastAtlasKey.put(tag, key);
+                        Log.i(TAG, "decoded atlas for " + tag + " "
+                                + full.getWidth() + "x" + full.getHeight());
+                    } else {
+                        Log.w(TAG, "atlas decode NULL for " + tag + " (" + bytes.length + " bytes)");
+                    }
+                } catch (Throwable t) {
+                    Log.w(TAG, "bad atlas for " + tag + ": " + t.getMessage());
+                }
+            }
+        }
+
+        Bitmap full = atlasBmps.get(tag);
+        int fx = o.optInt("fx", -1);
+        int fy = o.optInt("fy", -1);
+        int fw = o.optInt("fw", -1);
+        int fh = o.optInt("fh", -1);
+        boolean cropped = false;
+        if (full != null && fw > 0 && fh > 0) {
+            String rectKey = fx + "," + fy + "," + fw + "," + fh;
+            if (!rectKey.equals(lastRect.get(tag))) {
+                try {
+                    int cx = Math.max(0, Math.min(fx, full.getWidth() - 1));
+                    int cy = Math.max(0, Math.min(fy, full.getHeight() - 1));
+                    int cw = Math.max(1, Math.min(fw, full.getWidth() - cx));
+                    int ch = Math.max(1, Math.min(fh, full.getHeight() - cy));
+                    Bitmap crop = Bitmap.createBitmap(full, cx, cy, cw, ch);
+                    iv.setImageBitmap(crop);
+                    if (DIAGNOSTICS) iv.setBackgroundColor(Color.TRANSPARENT);
+                    iv.setPivotX(crop.getWidth() * 0.5f);
+                    iv.setPivotY(crop.getHeight() * 0.5f);
+                    lastRect.put(tag, rectKey);
+                    cropped = true;
+                } catch (Throwable t) {
+                    Log.w(TAG, "atlas crop failed for " + tag + " (" + fx + "," + fy
+                            + " " + fw + "x" + fh + " on "
+                            + full.getWidth() + "x" + full.getHeight() + "): " + t.getMessage());
+                }
+            } else {
+                cropped = true; // already showing this exact frame
+            }
+        } else if (full != null && iv.getDrawable() == null) {
+            // No usable frame rect: show the whole atlas rather than nothing.
+            iv.setImageBitmap(full);
+            if (DIAGNOSTICS) iv.setBackgroundColor(Color.TRANSPARENT);
+            cropped = true;
+        }
+
+        // ---- legacy BitmapData.encode() fallback ----
         String png = o.optString("png", "");
-        if (png != null && png.length() > 0 && !png.equals(lastPng.get(tag))) {
+        if (!cropped && png != null && png.length() > 0 && !png.equals(lastPng.get(tag))) {
             try {
                 byte[] bytes = Base64.decode(png, Base64.DEFAULT);
                 Bitmap bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
@@ -486,13 +583,13 @@ public final class ThorPresentation {
                     if (DIAGNOSTICS) iv.setBackgroundColor(Color.TRANSPARENT);
                     iv.setPivotX(bmp.getWidth() * 0.5f);
                     iv.setPivotY(bmp.getHeight() * 0.5f);
-                    Log.i(TAG, "decoded sprite png for " + tag + " "
+                    Log.i(TAG, "decoded legacy sprite png for " + tag + " "
                             + bmp.getWidth() + "x" + bmp.getHeight());
                 } else {
-                    Log.w(TAG, "sprite png decode NULL for " + tag + " (" + bytes.length + " bytes)");
+                    Log.w(TAG, "legacy png decode NULL for " + tag + " (" + bytes.length + " bytes)");
                 }
             } catch (Throwable t) {
-                Log.w(TAG, "bad sprite png for " + tag + ": " + t.getMessage());
+                Log.w(TAG, "bad legacy sprite png for " + tag + ": " + t.getMessage());
             }
         }
 
@@ -500,9 +597,32 @@ public final class ThorPresentation {
         if (tint != 0xFFFFFFFF) iv.setColorFilter(tint, PorterDuff.Mode.MULTIPLY);
         else iv.clearColorFilter();
 
+        // STAGE 5: give the ImageView a real size. WRAP_CONTENT + no bitmap was
+        // a 0x0 view, which made even the magenta placeholder invisible.
+        applySize(iv, o, true);
         transform(iv, o);
         boolean flipX = o.optBoolean("flipX", false);
         if (flipX) iv.setScaleX(-Math.abs(iv.getScaleX()));
+    }
+
+    /**
+     * Explicit LayoutParams size. Frame dims (fw/fh) are preferred for sprites
+     * because transform() already applies scale via setScaleX/setScaleY; using
+     * the scaled sprite width here would double-apply it.
+     */
+    private static void applySize(View v, JSONObject o, boolean useHeight) {
+        int w = o.optInt("fw", 0);
+        int h = o.optInt("fh", 0);
+        if (w <= 0) w = (int) o.optDouble("w", 0);
+        if (h <= 0) h = (int) o.optDouble("h", 0);
+        if (w <= 0 && (!useHeight || h <= 0)) return;
+        android.view.ViewGroup.LayoutParams raw = v.getLayoutParams();
+        if (!(raw instanceof FrameLayout.LayoutParams)) return;
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) raw;
+        boolean changed = false;
+        if (w > 0 && lp.width != w) { lp.width = w; changed = true; }
+        if (useHeight && h > 0 && lp.height != h) { lp.height = h; changed = true; }
+        if (changed) v.setLayoutParams(lp);
     }
 
     private static void transform(View v, JSONObject o) {
@@ -532,6 +652,9 @@ public final class ThorPresentation {
         if (tag == null || tag.length() == 0) return;
         View v = objectViews.remove(tag);
         lastPng.remove(tag);
+        lastAtlasKey.remove(tag);
+        lastRect.remove(tag);
+        atlasBmps.remove(tag);
         if (v != null && layer != null) layer.removeView(v);
     }
 }
