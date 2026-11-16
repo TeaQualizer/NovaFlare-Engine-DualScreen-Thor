@@ -26,6 +26,18 @@
  *   Also: every object View now gets EXPLICIT width/height. A WRAP_CONTENT
  *   ImageView with no bitmap is 0x0, so even the magenta diagnostic placeholder
  *   was invisible before. The legacy `png` field is kept as a fallback.
+ *
+ * STAGE 7 (device probe revealed the real FlxGraphic.key):
+ *   keys=...[/storage/emulated/0/.NovaFlare Engine/mods/images/characters/tea_Shaded.png]
+ *   keys=...[/storage/emulated/0/.NovaFlare Engine/assets/shared/images/menuBGMagenta.png]
+ *   These are ABSOLUTE EXTERNAL-STORAGE paths. OpenFL Assets.getBytes() can only
+ *   see packaged asset ids, so it returned a 3-byte stub. Haxe now sends the
+ *   path verbatim as `atlasPath` on every tick; Java uses
+ *   BitmapFactory.decodeFile() in the SAME process that already loaded the
+ *   graphic (same storage permission), caches the full Bitmap and crops frames.
+ *   No Base64 round trip is needed for these keys. Failed path reads are
+ *   retried at most once every 2s. The probe prints an `img=` line showing
+ *   exactly what happened for each sprite.
  */
 
 package org.novaflare.thor;
@@ -91,6 +103,13 @@ public final class ThorPresentation {
     private static final Map<String, Bitmap> atlasBmps = new HashMap<String, Bitmap>();
     private static final Map<String, String> lastAtlasKey = new HashMap<String, String>();
     private static final Map<String, String> lastRect = new HashMap<String, String>();
+    /** Stage 7: absolute filesystem path source + per-sprite image status. */
+    private static final Map<String, String> lastAtlasPath = new HashMap<String, String>();
+    private static final Map<String, Long> lastPathTry = new HashMap<String, Long>();
+    private static final Map<String, String> imgSource = new HashMap<String, String>();
+    private static final Map<String, String> lastImgState = new HashMap<String, String>();
+    /** inSampleSize used for a huge atlas; frame rects are divided by this. */
+    private static final Map<String, Integer> atlasSample = new HashMap<String, Integer>();
 
     private ThorPresentation() {}
 
@@ -205,13 +224,16 @@ public final class ThorPresentation {
              + " camStuck=" + st.optInt("camStuck", 0)
              + " rawOk=" + st.optInt("rawOk", 0)
              + " rawMiss=" + st.optInt("rawMiss", 0)
+             + " pathOk=" + st.optInt("pathOk", 0)
              + " rectOk=" + st.optInt("rectOk", 0)
              + "\npngOk=" + st.optInt("pngOk", 0)
              + " pngErr=" + st.optInt("pngErr", 0)
              + " err=" + st.optString("err", "")
              + "\nsrc=" + st.optString("src", "")
+             + "\nrawState=" + st.optString("rawState", "")
              + "\nkeys=" + st.optString("keys", "")
-             + "\ncams=" + st.optString("cams", "");
+             + "\ncams=" + st.optString("cams", "")
+             + "\ncamAfter=" + st.optString("camAfter", "");
     }
 
     /** Draws the state ON the lower screen. No logcat needed. */
@@ -230,7 +252,8 @@ public final class ThorPresentation {
                 + "  objectViews=" + objectViews.size()
                 + "\nbgApplied=" + (lastBgKey.length() > 0)
                 + "  objs=" + lastObjCount + " rm=" + lastRemoveCount
-                + "\n--- HAXE STATS ---\n" + lastStats;
+                + "\n--- HAXE STATS ---\n" + lastStats
+                + "\n--- JAVA IMG ---\n" + formatImgLine();
         tv.post(new Runnable() {
             @Override public void run() { tv.setText(s); }
         });
@@ -247,6 +270,11 @@ public final class ThorPresentation {
         lastAtlasKey.clear();
         lastRect.clear();
         atlasBmps.clear();
+        lastAtlasPath.clear();
+        lastPathTry.clear();
+        imgSource.clear();
+        lastImgState.clear();
+        atlasSample.clear();
         objectViews.clear();
         lastObjCount = 0;
         lastRemoveCount = 0;
@@ -512,10 +540,43 @@ public final class ThorPresentation {
             Log.i(TAG, "created ImageView for " + tag + " (type=" + type + ")");
         }
 
-        // ---- STAGE 5: primary image source = raw packaged atlas PNG ----
-        // Haxe sends the whole atlas once (and re-sends it on the 3s background
-        // repush). Decode it once, cache it, then crop the tiny frame rect that
-        // arrives on every tick. This avoids BitmapData.encode() entirely.
+        // ---- STAGE 7: PRIMARY source = absolute filesystem path ----
+        // FlxGraphic.key on this fork's Android build is an external-storage
+        // path ("/storage/emulated/0/.NovaFlare Engine/..."). The game already
+        // loaded the same PNG in this process, so decodeFile() has the same
+        // permission and needs no Base64 transfer at all.
+        String atlasPath = o.optString("atlasPath", "");
+        if (atlasPath == null || "null".equals(atlasPath)) atlasPath = "";
+        if (atlasPath.length() > 1 && !atlasPath.equals(lastAtlasPath.get(tag))) {
+            Long last = lastPathTry.get(tag);
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (last == null || (now - last) > 2000L) {
+                lastPathTry.put(tag, now);
+                try {
+                    Bitmap fromFile = decodeAtlasFile(atlasPath, tag);
+                    if (fromFile != null) {
+                        final Integer smp = atlasSample.get(tag);
+                        final String suffix = (smp != null && smp > 1) ? "/S" + smp : "";
+                        atlasBmps.put(tag, fromFile);
+                        lastAtlasPath.put(tag, atlasPath);
+                        lastRect.remove(tag);      // new atlas -> re-crop
+                        imgSource.put(tag, "PATH:" + fromFile.getWidth() + "x" + fromFile.getHeight() + suffix);
+                        Log.i(TAG, "decoded atlas FILE for " + tag + " "
+                                + fromFile.getWidth() + "x" + fromFile.getHeight()
+                                + " <- " + atlasPath);
+                    } else {
+                        imgSource.put(tag, "PATH:FAIL");
+                        Log.w(TAG, "decodeFile NULL for " + tag + " <- " + atlasPath);
+                    }
+                } catch (Throwable t) {
+                    imgSource.put(tag, "PATH:ERR:" + t.getClass().getSimpleName());
+                    Log.w(TAG, "decodeFile failed for " + tag + ": " + t);
+                }
+            }
+        }
+
+        // ---- STAGE 5: fallback image source = raw packaged atlas PNG ----
+        // Used only when the key is NOT a real filesystem path.
         String atlas = o.optString("atlas", "");
         // A JSON null can surface as the literal string "null", and "null" is
         // exactly 4 legal Base64 chars -> the mysterious 3-byte stub in logcat.
@@ -527,6 +588,7 @@ public final class ThorPresentation {
                 try {
                     byte[] bytes = Base64.decode(atlas, Base64.DEFAULT);
                     if (!isPngBytes(bytes)) {
+                        if (imgSource.get(tag) == null) imgSource.put(tag, "B64:STUB");
                         Log.w(TAG, "atlas NOT PNG for " + tag + " (" + bytes.length
                                 + " bytes) head=" + atlas.substring(0, Math.min(24, atlas.length())));
                     } else {
@@ -536,13 +598,18 @@ public final class ThorPresentation {
                             lastAtlasKey.put(tag, key);
                             // New atlas -> force a fresh crop on the next tick.
                             lastRect.remove(tag);
+                            final String prev = imgSource.get(tag);
+                            if (prev == null || !prev.startsWith("PATH:"))
+                                imgSource.put(tag, "B64:" + full.getWidth() + "x" + full.getHeight());
                             Log.i(TAG, "decoded atlas for " + tag + " "
                                     + full.getWidth() + "x" + full.getHeight());
                         } else {
+                            if (imgSource.get(tag) == null) imgSource.put(tag, "B64:NULL");
                             Log.w(TAG, "atlas decode NULL for " + tag + " (" + bytes.length + " bytes)");
                         }
                     }
                 } catch (Throwable t) {
+                    if (imgSource.get(tag) == null) imgSource.put(tag, "B64:ERR");
                     Log.w(TAG, "bad atlas for " + tag + ": " + t.getMessage());
                 }
             }
@@ -558,10 +625,14 @@ public final class ThorPresentation {
             String rectKey = fx + "," + fy + "," + fw + "," + fh;
             if (!rectKey.equals(lastRect.get(tag))) {
                 try {
-                    int cx = Math.max(0, Math.min(fx, full.getWidth() - 1));
-                    int cy = Math.max(0, Math.min(fy, full.getHeight() - 1));
-                    int cw = Math.max(1, Math.min(fw, full.getWidth() - cx));
-                    int ch = Math.max(1, Math.min(fh, full.getHeight() - cy));
+                    final Integer smp = atlasSample.get(tag);
+                    final int s = (smp != null && smp > 1) ? smp : 1;
+                    final int rFx = fx / s, rFy = fy / s;
+                    final int rFw = Math.max(1, fw / s), rFh = Math.max(1, fh / s);
+                    final int cx = Math.max(0, Math.min(rFx, full.getWidth() - 1));
+                    final int cy = Math.max(0, Math.min(rFy, full.getHeight() - 1));
+                    final int cw = Math.max(1, Math.min(rFw, full.getWidth() - cx));
+                    final int ch = Math.max(1, Math.min(rFh, full.getHeight() - cy));
                     Bitmap crop = Bitmap.createBitmap(full, cx, cy, cw, ch);
                     iv.setImageBitmap(crop);
                     if (DIAGNOSTICS) iv.setBackgroundColor(Color.TRANSPARENT);
@@ -569,19 +640,29 @@ public final class ThorPresentation {
                     iv.setPivotY(crop.getHeight() * 0.5f);
                     lastRect.put(tag, rectKey);
                     cropped = true;
+                    final boolean clamped = (cx != rFx || cy != rFy || cw != rFw || ch != rFh);
+                    setImg(tag, "CROP:" + cw + "x" + ch + (clamped ? "/CLAMP" : "")
+                            + (s > 1 ? "/S" + s : ""));
+                    if (clamped) Log.w(TAG, "frame rect clamped for " + tag + ": "
+                            + fx + "," + fy + " " + fw + "x" + fh + " /S" + s + " -> "
+                            + cx + "," + cy + " " + cw + "x" + ch
+                            + " on " + full.getWidth() + "x" + full.getHeight());
                 } catch (Throwable t) {
+                    setImg(tag, "CROP:ERR");
                     Log.w(TAG, "atlas crop failed for " + tag + " (" + fx + "," + fy
                             + " " + fw + "x" + fh + " on "
                             + full.getWidth() + "x" + full.getHeight() + "): " + t.getMessage());
                 }
             } else {
                 cropped = true; // already showing this exact frame
+                setImg(tag, "CROP:CACHED");
             }
         } else if (full != null && iv.getDrawable() == null) {
             // No usable frame rect: show the whole atlas rather than nothing.
             iv.setImageBitmap(full);
             if (DIAGNOSTICS) iv.setBackgroundColor(Color.TRANSPARENT);
             cropped = true;
+            setImg(tag, "FULL");
         }
 
         // ---- legacy BitmapData.encode() fallback ----
@@ -596,6 +677,8 @@ public final class ThorPresentation {
                     if (DIAGNOSTICS) iv.setBackgroundColor(Color.TRANSPARENT);
                     iv.setPivotX(bmp.getWidth() * 0.5f);
                     iv.setPivotY(bmp.getHeight() * 0.5f);
+                    cropped = true;
+                    setImg(tag, "PNG:" + bmp.getWidth() + "x" + bmp.getHeight());
                     Log.i(TAG, "decoded legacy sprite png for " + tag + " "
                             + bmp.getWidth() + "x" + bmp.getHeight());
                 } else {
@@ -605,6 +688,8 @@ public final class ThorPresentation {
                 Log.w(TAG, "bad legacy sprite png for " + tag + ": " + t.getMessage());
             }
         }
+
+        if (!cropped) setImg(tag, "NOIMG");
 
         int tint = o.optInt("color", 0xFFFFFFFF);
         if (tint != 0xFFFFFFFF) iv.setColorFilter(tint, PorterDuff.Mode.MULTIPLY);
@@ -636,6 +721,54 @@ public final class ThorPresentation {
         if (w > 0 && lp.width != w) { lp.width = w; changed = true; }
         if (useHeight && h > 0 && lp.height != h) { lp.height = h; changed = true; }
         if (changed) v.setLayoutParams(lp);
+    }
+
+    /**
+     * Stage 7: decode an external-storage atlas without risking an OOM that
+     * would take the whole game down. Read bounds first, downsample only sheets
+     * larger than 32 megapixels, and remember the factor so frame rects can be
+     * divided by the same amount before Bitmap.createBitmap().
+     */
+    private static Bitmap decodeAtlasFile(String path, String tag) {
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(path, bounds);
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
+            final long px = (long) bounds.outWidth * bounds.outHeight;
+            int sample = 1;
+            while (px / ((long) sample * sample) > 32L * 1024 * 1024) sample *= 2;
+            BitmapFactory.Options opt = new BitmapFactory.Options();
+            opt.inSampleSize = sample;
+            opt.inPreferredConfig = Bitmap.Config.ARGB_8888;
+            opt.inScaled = false;
+            Bitmap bmp = BitmapFactory.decodeFile(path, opt);
+            if (bmp != null) {
+                atlasSample.put(tag, sample);
+                Log.i(TAG, "atlas file " + bounds.outWidth + "x" + bounds.outHeight
+                        + " sample=" + sample + " for " + tag);
+            }
+            return bmp;
+        } catch (Throwable t) {
+            Log.w(TAG, "decodeAtlasFile failed for " + tag + ": " + t);
+            return null;
+        }
+    }
+
+    /** Stage 7: keep the source and the last action separate so the img= line never grows. */
+    private static void setImg(String tag, String suffix) {
+        final String s = imgSource.get(tag);
+        lastImgState.put(tag, (s == null ? "NONE" : s) + "+" + suffix);
+    }
+
+    private static String formatImgLine() {
+        if (lastImgState.isEmpty()) return "(none)";
+        final StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, String> e : lastImgState.entrySet()) {
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(e.getKey()).append('=').append(e.getValue());
+        }
+        return sb.toString();
     }
 
     /** Reject the tiny stub that Assets.getBytes() returns for a bad asset id. */
@@ -675,6 +808,11 @@ public final class ThorPresentation {
         lastAtlasKey.remove(tag);
         lastRect.remove(tag);
         atlasBmps.remove(tag);
+        lastAtlasPath.remove(tag);
+        lastPathTry.remove(tag);
+        imgSource.remove(tag);
+        lastImgState.remove(tag);
+        atlasSample.remove(tag);
         if (v != null && layer != null) layer.removeView(v);
     }
 }
