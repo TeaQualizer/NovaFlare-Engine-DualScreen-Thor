@@ -202,6 +202,7 @@ public final class ThorPresentation {
              + " byTag=" + st.optInt("byTag", 0)
              + " catchAll=" + st.optBoolean("catchAll", false)
              + "\ncamFixed=" + st.optInt("camFixed", 0)
+             + " camStuck=" + st.optInt("camStuck", 0)
              + " rawOk=" + st.optInt("rawOk", 0)
              + " rawMiss=" + st.optInt("rawMiss", 0)
              + " rectOk=" + st.optInt("rectOk", 0)
@@ -209,6 +210,7 @@ public final class ThorPresentation {
              + " pngErr=" + st.optInt("pngErr", 0)
              + " err=" + st.optString("err", "")
              + "\nsrc=" + st.optString("src", "")
+             + "\nkeys=" + st.optString("keys", "")
              + "\ncams=" + st.optString("cams", "");
     }
 
@@ -515,19 +517,30 @@ public final class ThorPresentation {
         // repush). Decode it once, cache it, then crop the tiny frame rect that
         // arrives on every tick. This avoids BitmapData.encode() entirely.
         String atlas = o.optString("atlas", "");
-        if (atlas != null && atlas.length() > 0) {
+        // A JSON null can surface as the literal string "null", and "null" is
+        // exactly 4 legal Base64 chars -> the mysterious 3-byte stub in logcat.
+        // Real PNG Base64 is always far longer than 16 chars.
+        if (atlas == null || "null".equals(atlas) || atlas.length() < 16) atlas = "";
+        if (atlas.length() > 0) {
             String key = atlas.length() + ":" + atlas.hashCode();
             if (!key.equals(lastAtlasKey.get(tag))) {
                 try {
                     byte[] bytes = Base64.decode(atlas, Base64.DEFAULT);
-                    Bitmap full = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-                    if (full != null) {
-                        atlasBmps.put(tag, full);
-                        lastAtlasKey.put(tag, key);
-                        Log.i(TAG, "decoded atlas for " + tag + " "
-                                + full.getWidth() + "x" + full.getHeight());
+                    if (!isPngBytes(bytes)) {
+                        Log.w(TAG, "atlas NOT PNG for " + tag + " (" + bytes.length
+                                + " bytes) head=" + atlas.substring(0, Math.min(24, atlas.length())));
                     } else {
-                        Log.w(TAG, "atlas decode NULL for " + tag + " (" + bytes.length + " bytes)");
+                        Bitmap full = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                        if (full != null) {
+                            atlasBmps.put(tag, full);
+                            lastAtlasKey.put(tag, key);
+                            // New atlas -> force a fresh crop on the next tick.
+                            lastRect.remove(tag);
+                            Log.i(TAG, "decoded atlas for " + tag + " "
+                                    + full.getWidth() + "x" + full.getHeight());
+                        } else {
+                            Log.w(TAG, "atlas decode NULL for " + tag + " (" + bytes.length + " bytes)");
+                        }
                     }
                 } catch (Throwable t) {
                     Log.w(TAG, "bad atlas for " + tag + ": " + t.getMessage());
@@ -623,6 +636,13 @@ public final class ThorPresentation {
         if (w > 0 && lp.width != w) { lp.width = w; changed = true; }
         if (useHeight && h > 0 && lp.height != h) { lp.height = h; changed = true; }
         if (changed) v.setLayoutParams(lp);
+    }
+
+    /** Reject the tiny stub that Assets.getBytes() returns for a bad asset id. */
+    private static boolean isPngBytes(byte[] b) {
+        if (b == null || b.length < 8) return false;
+        return (b[0] & 0xFF) == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G'
+                && b[4] == 0x0D && b[5] == 0x0A && b[6] == 0x1A && b[7] == 0x0A;
     }
 
     private static void transform(View v, JSONObject o) {
