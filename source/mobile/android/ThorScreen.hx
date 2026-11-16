@@ -77,6 +77,11 @@ import openfl.Lib;
 import openfl.utils.Assets;
 import openfl.utils.ByteArray;
 
+#if sys
+import sys.FileSystem;
+import sys.io.File;
+#end
+
 class ThorScreen {
 	/** Virtual coordinate space of the lower screen (3.92" 1240x1080). */
 	public static final BOTTOM_W:Int = 1240;
@@ -102,7 +107,7 @@ class ThorScreen {
 	/**
 	 * STAGE 4. Make the lower screen work WITHOUT relying on
 	 * LuaUtils.cameraFromString('bottom') being present in the built binary.
-	 *  FORCE_BY_TAG: bottom/ds_/thor_ tags are assigned .cameras=[camBottom]
+	 *  FORCE_BY_TAG: bottom*/ds_*/thor_* tags are assigned .cameras=[camBottom]
 	 *    directly from Haxe. camBottom.flashSprite is hidden, so they show ONLY
 	 *    on the lower screen.
 	 *  MIRROR_ALL_IF_NONE: if nothing reached camBottom, mirror every modchart
@@ -230,6 +235,7 @@ class ThorScreen {
 			byTag: 0,
 			catchAll: false,
 			camFixed: 0,
+			camStuck: 0,
 			rawOk: 0,
 			rawMiss: 0,
 			rectOk: 0,
@@ -237,6 +243,7 @@ class ThorScreen {
 			pngErr: 0,
 			cams: '',
 			src: '',
+			keys: '',
 			err: ''
 		};
 		final payload:Dynamic = {menu: !inPlay, objects: [], remove: [], stats: stats};
@@ -275,7 +282,7 @@ class ThorScreen {
 			_updateJNI(json);
 			if (now - _lastLog > LOG_MS) {
 				_lastLog = now;
-				trace('[Thor] tick inPlay=$inPlay state=${stats.state} lua=${stats.lua} camBottom=${stats.camBottom} sprites=${stats.sprites} texts=${stats.texts} onCam=${stats.onCam} byTag=${stats.byTag} camFixed=${stats.camFixed} onBottom=${stats.onBottom} rawOk=${stats.rawOk} rawMiss=${stats.rawMiss} rectOk=${stats.rectOk} pngOk=${stats.pngOk} pngErr=${stats.pngErr} objs=${payload.objects.length} jsonLen=${json.length} cams=${stats.cams} src=${stats.src} err=${stats.err}');
+				trace('[Thor] tick inPlay=$inPlay state=${stats.state} lua=${stats.lua} camBottom=${stats.camBottom} sprites=${stats.sprites} texts=${stats.texts} onCam=${stats.onCam} byTag=${stats.byTag} camFixed=${stats.camFixed} camStuck=${stats.camStuck} onBottom=${stats.onBottom} rawOk=${stats.rawOk} rawMiss=${stats.rawMiss} rectOk=${stats.rectOk} pngOk=${stats.pngOk} pngErr=${stats.pngErr} objs=${payload.objects.length} jsonLen=${json.length} cams=${stats.cams} src=${stats.src} keys=${stats.keys} err=${stats.err}');
 			}
 		} catch (e:Dynamic) {
 			trace('[Thor] Json.stringify/JNI failed: $e');
@@ -319,6 +326,7 @@ class ThorScreen {
 		var nOnCam:Int = 0;
 		var nByTag:Int = 0;
 		var nCamFixed:Int = 0;
+		var nCamStuck:Int = 0;
 		var nRawOk:Int = 0;
 		var nRawMiss:Int = 0;
 		var nRectOk:Int = 0;
@@ -327,6 +335,7 @@ class ThorScreen {
 		var catchAll:Bool = false;
 		final dump:Array<String> = [];
 		final srcDump:Array<String> = [];
+		final keyDump:Array<String> = [];
 
 		#if LUA_ALLOWED
 		// Pass 1: count every Lua object and dump the camera each one is on.
@@ -377,11 +386,20 @@ class ThorScreen {
 					try {
 						spr.cameras = [cam];
 						nCamFixed++;
+						// Distinguish "Lua re-poisons it every frame" from
+						// "the assignment itself does not stick".
+						if (camerasBroken(spr)) nCamStuck++;
 					} catch (e:Dynamic) {
 						stats.err = 'fix cam $tag: $e';
 					}
 				} else if (byTag && !onCamNow && FORCE_BY_TAG) {
 					try { spr.cameras = [cam]; } catch (e:Dynamic) {}
+				}
+
+				// Show the real FlxGraphic.key on the probe; if rawMiss stays >0
+				// this single line tells us exactly which path form to add.
+				if (keyDump.length < 3) {
+					try { keyDump.push('$tag=[${graphicKey(spr.graphic)}]'); } catch (e:Dynamic) {}
 				}
 
 				current.set(tag, true);
@@ -475,6 +493,7 @@ class ThorScreen {
 					try {
 						txt.cameras = [cam];
 						nCamFixed++;
+						if (camerasBroken(txt)) nCamStuck++;
 					} catch (e:Dynamic) {
 						stats.err = 'fix cam $tag: $e';
 					}
@@ -540,12 +559,14 @@ class ThorScreen {
 		stats.onCam = nOnCam;
 		stats.byTag = nByTag;
 		stats.camFixed = nCamFixed;
+		stats.camStuck = nCamStuck;
 		stats.rawOk = nRawOk;
 		stats.rawMiss = nRawMiss;
 		stats.rectOk = nRectOk;
 		stats.pngOk = nPngOk;
 		stats.pngErr = nPngErr;
 		stats.src = srcDump.join(' ');
+		stats.keys = keyDump.join(' ');
 
 		for (tag in _seen.keys()) if (!current.exists(tag)) payload.remove.push(tag);
 		_seen = current;
@@ -630,60 +651,119 @@ class ThorScreen {
 	}
 
 	/**
-	 * STAGE 5: resolve the ORIGINAL packaged PNG for a sprite's FlxGraphic,
-	 * the same way loadMenuDesatPng() does. FlxGraphic.key is often prefixed by
-	 * Polymod ("shared:shared/images/...png"), so several candidate OpenFL
-	 * asset ids are tried. Reflect is used to stay compatible across flixel
-	 * versions without compile-time field dependencies.
+	 * STAGE 6. Resolve the ORIGINAL packaged PNG for a sprite's FlxGraphic.
+	 *
+	 * Paths.hx (this fork) builds FlxGraphic.key from `file`:
+	 *     getSharedPath('images/foo.png')  -> "assets/shared/images/foo.png"
+	 *     modsImages('foo')               -> "mods/<mod>/images/foo.png"
+	 *     getLibraryPathForce(...)        -> "<lib>:assets/<level>/images/foo.png"
+	 * while OpenFL's Assets.getBytes() expects an asset id RELATIVE to assets/
+	 * (the background works with "shared/images/menuDesat.png", NOT
+	 * "assets/shared/images/menuDesat.png"). The previous build only ever
+	 * ADDED "assets/" and never REMOVED it, so every candidate missed.
+	 *
+	 * Worse: Assets.getBytes() does NOT throw for a bad id on this target, it
+	 * returns a tiny stub (logcat: "atlas decode NULL (3 bytes)"). So every
+	 * candidate is now verified against the 8-byte PNG signature before use.
 	 */
 	static function readRawAtlas(spr:FlxSprite):Null<String> {
 		try {
 			final g:Dynamic = spr.graphic;
 			if (g == null) return null;
-			final key:String = Std.string(Reflect.field(g, 'key'));
+			final key:String = graphicKey(g);
 			for (p in assetCandidates(key)) {
-				try {
-					final ba = Assets.getBytes(p);
-					if (ba != null && ba.length > 0) {
-						final bytes:haxe.io.Bytes = ba;
-						trace('[Thor] raw atlas for $key from $p (${ba.length} bytes)');
-						return Base64.encode(bytes);
-					}
-				} catch (e:Dynamic) {}
+				final b:Null<haxe.io.Bytes> = getRawBytes(p);
+				if (b != null) {
+					trace('[Thor] raw atlas [$key] <- $p (${b.length} bytes)');
+					return Base64.encode(b);
+				}
 			}
-			trace('[Thor] no raw atlas asset for $key');
+			trace('[Thor] NO valid PNG for [$key]');
 		} catch (e:Dynamic) {
 			trace('[Thor] readRawAtlas failed: $e');
 		}
 		return null;
 	}
 
-	/** Build de-duplicated OpenFL asset id candidates from a FlxGraphic key. */
+	/** FlxGraphic key across flixel versions; Reflect avoids compile-time deps. */
+	static function graphicKey(g:Dynamic):String {
+		final names:Array<String> = ['key', 'assetsKey', 'imagePath', 'path', 'name'];
+		for (n in names) {
+			try {
+				final v = Reflect.field(g, n);
+				if (v == null) continue;
+				final s:String = Std.string(v);
+				if (s.length > 0 && s != 'null') return s;
+			} catch (e:Dynamic) {}
+		}
+		return '';
+	}
+
+	/** Only accept real PNG bytes; the 3-byte stub must be rejected. */
+	static function isPng(b:Null<haxe.io.Bytes>):Bool {
+		try {
+			if (b == null || b.length < 8) return false;
+			return b.get(0) == 0x89 && b.get(1) == 0x50 && b.get(2) == 0x4E && b.get(3) == 0x47
+				&& b.get(4) == 0x0D && b.get(5) == 0x0A && b.get(6) == 0x1A && b.get(7) == 0x0A;
+		} catch (e:Dynamic) {
+			return false;
+		}
+	}
+
+	/** Try OpenFL assets first, then the real filesystem (mod folders on Android). */
+	static function getRawBytes(p:String):Null<haxe.io.Bytes> {
+		try {
+			final ba = Assets.getBytes(p);
+			if (ba != null && ba.length > 0) {
+				final b:haxe.io.Bytes = ba;
+				if (isPng(b)) return b;
+			}
+		} catch (e:Dynamic) {}
+		#if sys
+		try {
+			for (cand in [p, Sys.getCwd() + p]) {
+				if (!FileSystem.exists(cand)) continue;
+				final b2:haxe.io.Bytes = File.getBytes(cand);
+				if (isPng(b2)) return b2;
+			}
+		} catch (e:Dynamic) {}
+		#end
+		return null;
+	}
+
+	/**
+	 * De-duplicated candidates. THE critical entry is `rel` (strip a leading
+	 * "assets/"), because that is the OpenFL asset-id namespace.
+	 */
 	static function assetCandidates(rawKey:Null<String>):Array<String> {
 		final out:Array<String> = [];
-		if (rawKey == null) return out;
+		if (rawKey == null || rawKey.length == 0) return out;
 		var k:String = rawKey;
-		// Strip Polymod's "library:path" prefix, but keep a colon that belongs
-		// to the path itself. The .png test keeps this conservative.
+		// "<lib>:assets/<level>/images/foo.png" -> "assets/<level>/images/foo.png"
 		final colon:Int = k.lastIndexOf(':');
 		if (colon >= 0 && k.indexOf('.png') > colon) k = k.substr(colon + 1);
+		final q:Int = k.indexOf('?');
+		if (q >= 0) k = k.substr(0, q);
 		final pngIdx:Int = k.toLowerCase().lastIndexOf('.png');
 		if (pngIdx < 0) return out;
 		k = k.substr(0, pngIdx + 4);
-		if (k.indexOf('/') >= 0) {
-			final file:String = k.substr(k.lastIndexOf('/') + 1);
-			pushUnique(out, k);
-			pushUnique(out, 'assets/' + k);
-			pushUnique(out, 'images/' + file);
-			pushUnique(out, 'shared/images/' + file);
-			pushUnique(out, 'assets/shared/images/' + file);
-			pushUnique(out, 'assets/images/' + file);
-		} else {
-			pushUnique(out, 'images/' + k);
-			pushUnique(out, 'shared/images/' + k);
-			pushUnique(out, 'assets/shared/images/' + k);
-			pushUnique(out, k);
-		}
+
+		final file:String = k.indexOf('/') >= 0 ? k.substr(k.lastIndexOf('/') + 1) : k;
+		final rel:String = k.indexOf('assets/') == 0 ? k.substr(7) : k;
+		final modRel:String = k.indexOf('mods/') == 0 ? k.substr(5) : k;
+
+		// OpenFL asset ids - tried FIRST.
+		pushUnique(out, rel);                          // shared/images/foo.png  <-- FIX
+		pushUnique(out, k);                            // assets/shared/images/foo.png
+		pushUnique(out, modRel);                       // <mod>/images/foo.png
+		pushUnique(out, 'shared/images/' + file);
+		pushUnique(out, 'images/' + file);
+		pushUnique(out, 'assets/shared/images/' + file);
+		pushUnique(out, 'assets/images/' + file);
+		pushUnique(out, 'assets/' + rel);
+		pushUnique(out, file);
+		// Filesystem mod paths, handled by getRawBytes via sys.io.File.
+		pushUnique(out, 'mods/' + rel);
 		return out;
 	}
 
