@@ -52,6 +52,21 @@
  *       with bottom* tags could NEVER increment onCam. Fixed to independent
  *       counters, so the probe now proves whether the forced camera stuck.
  *
+ * Stage 7 - the probe printed the real FlxGraphic keys:
+ *   bottomChar  = /storage/emulated/0/.NovaFlare Engine/mods/images/characters/tea_Shaded.png
+ *   bottomPanel = /storage/emulated/0/.NovaFlare Engine/assets/shared/images/menuBGMagenta.png
+ * These are ABSOLUTE EXTERNAL-STORAGE paths, not OpenFL asset ids. That is why
+ * Assets.getBytes() kept returning a 3-byte stub. This build:
+ *   1. Sends `atlasPath` (the key verbatim) on EVERY tick - it is only ~100
+ *      bytes - and Java uses BitmapFactory.decodeFile() in the SAME process
+ *      (and with the SAME storage permission) that already loaded the graphic.
+ *      No Base64 round trip, no sys.FileSystem dependency, no Haxe asset id.
+ *   2. Keeps the raw Base64 atlas as a fallback for packaged-asset keys.
+ *   3. Reports rawOk/rawMiss as the STATE of every sprite on every tick,
+ *      instead of only counting ticks that happened to re-read the file.
+ *   4. Java prints an `img=` line showing what actually happened per tag
+ *      (PATH:4096x4096 / CROP:739x952 / PATH:FAIL / NONE).
+ *
  * Java side has a matching DIAGNOSTICS overlay: set DIAGNOSTICS=false in
  * ThorPresentation.java, and SELF_TEST=false here, once everything is confirmed.
  */
@@ -238,11 +253,14 @@ class ThorScreen {
 			camStuck: 0,
 			rawOk: 0,
 			rawMiss: 0,
+			pathOk: 0,
 			rectOk: 0,
 			pngOk: 0,
 			pngErr: 0,
 			cams: '',
+			camAfter: '',
 			src: '',
+			rawState: '',
 			keys: '',
 			err: ''
 		};
@@ -282,7 +300,7 @@ class ThorScreen {
 			_updateJNI(json);
 			if (now - _lastLog > LOG_MS) {
 				_lastLog = now;
-				trace('[Thor] tick inPlay=$inPlay state=${stats.state} lua=${stats.lua} camBottom=${stats.camBottom} sprites=${stats.sprites} texts=${stats.texts} onCam=${stats.onCam} byTag=${stats.byTag} camFixed=${stats.camFixed} camStuck=${stats.camStuck} onBottom=${stats.onBottom} rawOk=${stats.rawOk} rawMiss=${stats.rawMiss} rectOk=${stats.rectOk} pngOk=${stats.pngOk} pngErr=${stats.pngErr} objs=${payload.objects.length} jsonLen=${json.length} cams=${stats.cams} src=${stats.src} keys=${stats.keys} err=${stats.err}');
+				trace('[Thor] tick inPlay=$inPlay state=${stats.state} lua=${stats.lua} camBottom=${stats.camBottom} sprites=${stats.sprites} texts=${stats.texts} onCam=${stats.onCam} byTag=${stats.byTag} camFixed=${stats.camFixed} camStuck=${stats.camStuck} onBottom=${stats.onBottom} rawOk=${stats.rawOk} rawMiss=${stats.rawMiss} pathOk=${stats.pathOk} rectOk=${stats.rectOk} pngOk=${stats.pngOk} pngErr=${stats.pngErr} objs=${payload.objects.length} jsonLen=${json.length} cams=${stats.cams} camAfter=${stats.camAfter} src=${stats.src} rawState=${stats.rawState} keys=${stats.keys} err=${stats.err}');
 			}
 		} catch (e:Dynamic) {
 			trace('[Thor] Json.stringify/JNI failed: $e');
@@ -329,12 +347,15 @@ class ThorScreen {
 		var nCamStuck:Int = 0;
 		var nRawOk:Int = 0;
 		var nRawMiss:Int = 0;
+		var nPathOk:Int = 0;
 		var nRectOk:Int = 0;
 		var nPngOk:Int = 0;
 		var nPngErr:Int = 0;
 		var catchAll:Bool = false;
 		final dump:Array<String> = [];
+		final camAfterDump:Array<String> = [];
 		final srcDump:Array<String> = [];
+		final rawStateDump:Array<String> = [];
 		final keyDump:Array<String> = [];
 
 		#if LUA_ALLOWED
@@ -384,7 +405,8 @@ class ThorScreen {
 				// re-poisoning it, camFixed keeps climbing and the probe shows it.
 				if (camerasBroken(spr)) {
 					try {
-						spr.cameras = [cam];
+						final fixed:Array<FlxCamera> = [cam];
+						spr.cameras = fixed;
 						nCamFixed++;
 						// Distinguish "Lua re-poisons it every frame" from
 						// "the assignment itself does not stick".
@@ -393,8 +415,12 @@ class ThorScreen {
 						stats.err = 'fix cam $tag: $e';
 					}
 				} else if (byTag && !onCamNow && FORCE_BY_TAG) {
-					try { spr.cameras = [cam]; } catch (e:Dynamic) {}
+					try {
+						final fixed2:Array<FlxCamera> = [cam];
+						spr.cameras = fixed2;
+					} catch (e:Dynamic) {}
 				}
+				if (camAfterDump.length < 6) camAfterDump.push('$tag=${cameraLabel(spr, cam)}');
 
 				// Show the real FlxGraphic.key on the probe; if rawMiss stays >0
 				// this single line tells us exactly which path form to add.
@@ -405,6 +431,18 @@ class ThorScreen {
 				current.set(tag, true);
 				nOnBottom++;
 
+				// STAGE 7: FlxGraphic.key is an ABSOLUTE external-storage path on
+				// this Android build, e.g.
+				//   /storage/emulated/0/.NovaFlare Engine/mods/images/characters/tea_Shaded.png
+				// OpenFL Assets.getBytes() cannot resolve it (3-byte stub). Send
+				// the path string itself; Java reads it with BitmapFactory.decodeFile
+				// in the same process/permission context that loaded the graphic.
+				var atlasPath:String = '';
+				try {
+					final p:String = graphicKey(spr.graphic);
+					if (p != null && p.length > 1 && p != 'null') atlasPath = p;
+				} catch (e:Dynamic) {}
+
 				var atlas:Null<String> = null;
 				var png:Null<String> = null;
 				var rect:Dynamic = null;
@@ -414,29 +452,29 @@ class ThorScreen {
 					final needAtlas:Bool = !_atlasCache.exists(tag);
 					final needFrame:Bool = needAtlas || _frameCache.get(tag) != frameKey;
 
-					// STAGE 5(a): primary image source = raw packaged PNG bytes.
-					// The whole atlas is sent ONCE per tag (and re-sent on the 3s
-					// background repush); Java decodes it once and caches it.
-					if (needAtlas && USE_RAW_ATLAS) {
+					// Secondary source: raw PNG bytes via Assets.getBytes / sys file.
+					// When a real filesystem path is available Java reads it directly,
+					// so a Base64 atlas would only waste bandwidth.
+					if (atlasPath.length > 1) {
+						if (!_atlasCache.exists(tag)) _atlasCache.set(tag, 'PATH');
+					} else if (needAtlas && USE_RAW_ATLAS) {
 						final raw:Null<String> = readRawAtlas(spr);
 						if (raw != null && raw.length > 0) {
 							atlas = raw;
 							_atlasCache.set(tag, 'RAW');
-							nRawOk++;
 						} else {
 							_atlasCache.set(tag, 'MISS');
-							nRawMiss++;
 						}
 					}
 
 					// Frame rectangle is tiny, so send it every tick. Java crops
-					// only when the rect changes; this is what makes animated
-					// sprites work without re-encoding a PNG per frame.
+					// only when the rect changes; animated sprites cost no PNG.
 					rect = frameRect(spr);
 					if (rect != null) nRectOk++;
 
-					// Legacy encode() path, only when no raw atlas is available.
-					if (atlas == null && _atlasCache.get(tag) != 'RAW' && needFrame) {
+					// Legacy encode() path only when BOTH better sources failed.
+					if (atlas == null && _atlasCache.get(tag) != 'RAW'
+							&& atlasPath.length <= 1 && needFrame) {
 						final bmp:Null<BitmapData> = getFrameBitmap(spr);
 						if (bmp != null) {
 							png = encodeBitmap(bmp);
@@ -445,8 +483,18 @@ class ThorScreen {
 					}
 
 					_frameCache.set(tag, frameKey);
-					srcLabel = atlas != null ? 'RAW' : (_atlasCache.get(tag) == 'RAW' ? 'CROP' : 'ENC');
+					final state:Null<String> = _atlasCache.get(tag);
+					// STAGE 7: count the STATE of every sprite on EVERY tick. The
+					// old counters were 0 on 99% of frames because a cache hit
+					// skips the read entirely, which made rawOk/rawMiss useless.
+					final hasImage:Bool = atlas != null || state == 'RAW' || atlasPath.length > 1;
+					if (hasImage) nRawOk++; else nRawMiss++;
+					if (atlasPath.length > 1) nPathOk++;
+
+					srcLabel = atlas != null ? 'RAW' : (atlasPath.length > 1 ? 'PATH'
+							: (state == 'RAW' ? 'CROP' : 'ENC'));
 					if (srcDump.length < 8) srcDump.push('$tag=$srcLabel');
+					if (rawStateDump.length < 8) rawStateDump.push('$tag=${state != null ? state : "?"}');
 				} catch (e:Dynamic) {
 					nPngErr++;
 					stats.err = 'img $tag: $e';
@@ -461,6 +509,7 @@ class ThorScreen {
 						tag: tag,
 						type: 'sprite',
 						atlas: atlas,
+						atlasPath: atlasPath,
 						fx: rect != null ? rect.fx : -1,
 						fy: rect != null ? rect.fy : -1,
 						fw: rect != null ? rect.fw : -1,
@@ -491,15 +540,20 @@ class ThorScreen {
 
 				if (camerasBroken(txt)) {
 					try {
-						txt.cameras = [cam];
+						final fixed:Array<FlxCamera> = [cam];
+						txt.cameras = fixed;
 						nCamFixed++;
 						if (camerasBroken(txt)) nCamStuck++;
 					} catch (e:Dynamic) {
 						stats.err = 'fix cam $tag: $e';
 					}
 				} else if (byTag && !onCamNow && FORCE_BY_TAG) {
-					try { txt.cameras = [cam]; } catch (e:Dynamic) {}
+					try {
+						final fixed2:Array<FlxCamera> = [cam];
+						txt.cameras = fixed2;
+					} catch (e:Dynamic) {}
 				}
+				if (camAfterDump.length < 6) camAfterDump.push('$tag=${cameraLabel(txt, cam)}');
 
 				current.set(tag, true);
 				nOnBottom++;
@@ -562,10 +616,14 @@ class ThorScreen {
 		stats.camStuck = nCamStuck;
 		stats.rawOk = nRawOk;
 		stats.rawMiss = nRawMiss;
+		stats.pathOk = nPathOk;
 		stats.rectOk = nRectOk;
 		stats.pngOk = nPngOk;
 		stats.pngErr = nPngErr;
+		stats.cams = dump.join(' ');
+		stats.camAfter = camAfterDump.join(' ');
 		stats.src = srcDump.join(' ');
+		stats.rawState = rawStateDump.join(' ');
 		stats.keys = keyDump.join(' ');
 
 		for (tag in _seen.keys()) if (!current.exists(tag)) payload.remove.push(tag);
@@ -710,8 +768,23 @@ class ThorScreen {
 		}
 	}
 
-	/** Try OpenFL assets first, then the real filesystem (mod folders on Android). */
+	/**
+	 * STAGE 7: absolute external-storage paths MUST go straight to the real
+	 * filesystem. Assets.getBytes() only knows packaged asset ids and returns a
+	 * tiny stub for anything else, which used to poison the whole candidate list.
+	 */
 	static function getRawBytes(p:String):Null<haxe.io.Bytes> {
+		final abs:Bool = p.length > 0 && p.charAt(0) == '/';
+		#if sys
+		if (abs) {
+			try {
+				if (FileSystem.exists(p)) {
+					final b0:haxe.io.Bytes = File.getBytes(p);
+					if (isPng(b0)) return b0;
+				}
+			} catch (e:Dynamic) {}
+		}
+		#end
 		try {
 			final ba = Assets.getBytes(p);
 			if (ba != null && ba.length > 0) {
@@ -732,8 +805,14 @@ class ThorScreen {
 	}
 
 	/**
-	 * De-duplicated candidates. THE critical entry is `rel` (strip a leading
-	 * "assets/"), because that is the OpenFL asset-id namespace.
+	 * STAGE 7: the device reported keys like
+	 *   /storage/emulated/0/.NovaFlare Engine/assets/shared/images/menuBGMagenta.png
+	 *   /storage/emulated/0/.NovaFlare Engine/mods/images/characters/tea_Shaded.png
+	 * i.e. ABSOLUTE external-storage paths. The old candidate list started with
+	 * that same absolute path handed to Assets.getBytes(), which can only see
+	 * packaged asset ids and returns a 3-byte stub. Now the exact absolute path
+	 * goes FIRST for the sys.io.File branch, followed by every plausible
+	 * relative / OpenFL asset-id form derived from its tail.
 	 */
 	static function assetCandidates(rawKey:Null<String>):Array<String> {
 		final out:Array<String> = [];
@@ -749,21 +828,31 @@ class ThorScreen {
 		k = k.substr(0, pngIdx + 4);
 
 		final file:String = k.indexOf('/') >= 0 ? k.substr(k.lastIndexOf('/') + 1) : k;
-		final rel:String = k.indexOf('assets/') == 0 ? k.substr(7) : k;
-		final modRel:String = k.indexOf('mods/') == 0 ? k.substr(5) : k;
+		final abs:Bool = k.charAt(0) == '/';
+		// "assets/" wins over "mods/" because it maps to the OpenFL asset id.
+		var tail:String = k;
+		final ai:Int = k.indexOf('assets/');
+		if (ai >= 0) tail = k.substr(ai + 7);            // shared/images/foo.png
+		else {
+			final mi:Int = k.indexOf('mods/');
+			if (mi >= 0) tail = k.substr(mi + 5);        // <mod>/images/foo.png
+			else if (k.indexOf('assets/') == 0) tail = k.substr(7);
+			else if (k.indexOf('mods/') == 0) tail = k.substr(5);
+		}
+		final ii:Int = k.lastIndexOf('images/');
+		final imgTail:String = ii >= 0 ? k.substr(ii) : ('images/' + file);
 
-		// OpenFL asset ids - tried FIRST.
-		pushUnique(out, rel);                          // shared/images/foo.png  <-- FIX
-		pushUnique(out, k);                            // assets/shared/images/foo.png
-		pushUnique(out, modRel);                       // <mod>/images/foo.png
+		if (abs) pushUnique(out, k);                    // real file, sys.io.File
+		pushUnique(out, tail);                          // shared/images/foo.png
+		pushUnique(out, imgTail);                       // images/characters/foo.png
+		pushUnique(out, 'assets/' + tail);
 		pushUnique(out, 'shared/images/' + file);
 		pushUnique(out, 'images/' + file);
 		pushUnique(out, 'assets/shared/images/' + file);
 		pushUnique(out, 'assets/images/' + file);
-		pushUnique(out, 'assets/' + rel);
 		pushUnique(out, file);
-		// Filesystem mod paths, handled by getRawBytes via sys.io.File.
-		pushUnique(out, 'mods/' + rel);
+		if (!abs) pushUnique(out, k);
+		pushUnique(out, 'mods/' + imgTail);             // mods/images/characters/foo.png
 		return out;
 	}
 
